@@ -97,6 +97,65 @@ func TestDeleteExpiredAuthTokens(t *testing.T) {
 	}
 }
 
+func TestListAndDeleteUserAuthTokens(t *testing.T) {
+	repo := newTestSQLiteRepository(t)
+
+	id, err := repo.CreateUser("erin", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Two live tokens and one expired token.
+	base := time.Now().Add(-2 * time.Hour)
+	for i, hash := range []string{"live-1", "live-2", "expired-3"} {
+		expiresAt := time.Now().Add(time.Hour)
+		if hash == "expired-3" {
+			expiresAt = time.Now().Add(-time.Minute)
+		}
+		// Stagger created_at so the newest-first ordering is deterministic.
+		if _, err := repo.db.Exec(`
+			INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at)
+			VALUES (?, ?, ?, ?)
+		`, id, hash, expiresAt, base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("insert token %s: %v", hash, err)
+		}
+	}
+
+	tokens, err := repo.ListAuthTokens(id)
+	if err != nil {
+		t.Fatalf("list tokens: %v", err)
+	}
+	if len(tokens) != 3 {
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	// Newest first (expired-3 was created last).
+	if tokens[0].TokenHash != "expired-3" || tokens[2].TokenHash != "live-1" {
+		t.Fatalf("expected newest-first ordering, got %+v", tokens)
+	}
+	if tokens[0].UserID != id || tokens[0].ID == 0 {
+		t.Fatalf("unexpected token row: %+v", tokens[0])
+	}
+
+	// Listing is scoped per user: another user sees nothing.
+	otherID, err := repo.CreateUser("frank", "hash")
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	if tokens, err := repo.ListAuthTokens(otherID); err != nil || len(tokens) != 0 {
+		t.Fatalf("expected no tokens for other user: len=%d err=%v", len(tokens), err)
+	}
+
+	// Revoke-all removes every token of the user.
+	if err := repo.DeleteUserAuthTokens(id); err != nil {
+		t.Fatalf("delete user tokens: %v", err)
+	}
+	for _, hash := range []string{"live-1", "live-2", "expired-3"} {
+		if user, _ := repo.GetUserByTokenHash(hash); user != nil {
+			t.Fatalf("token %s must not resolve after revoke-all", hash)
+		}
+	}
+}
+
 func TestDeviceOwnerClaim(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 

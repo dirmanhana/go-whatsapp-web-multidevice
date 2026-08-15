@@ -12,6 +12,16 @@ type User struct {
 	UpdatedAt    time.Time `db:"updated_at"`
 }
 
+// AuthToken is a persisted auth session row. TokenHash stores the SHA-256
+// digest of the issued bearer token, never the raw token.
+type AuthToken struct {
+	ID        int64     `db:"id"`
+	UserID    int64     `db:"user_id"`
+	TokenHash string    `db:"token_hash"`
+	ExpiresAt time.Time `db:"expires_at"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
 // Chat represents a WhatsApp chat/conversation
 type Chat struct {
 	DeviceID            string    `db:"device_id"`

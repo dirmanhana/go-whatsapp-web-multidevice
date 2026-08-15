@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ type authRepoStub struct {
 type authToken struct {
 	userID    int64
 	expiresAt time.Time
+	createdAt time.Time
 }
 
 func newAuthRepoStub() *authRepoStub {
@@ -74,7 +76,37 @@ func (s *authRepoStub) GetUserByTokenHash(tokenHash string) (*domainChatStorage.
 }
 
 func (s *authRepoStub) CreateAuthToken(tokenHash string, userID int64, expiresAt time.Time) error {
-	s.tokens[tokenHash] = &authToken{userID: userID, expiresAt: expiresAt}
+	s.tokens[tokenHash] = &authToken{userID: userID, expiresAt: expiresAt, createdAt: time.Now()}
+	return nil
+}
+
+func (s *authRepoStub) ListAuthTokens(userID int64) ([]domainChatStorage.AuthToken, error) {
+	tokens := []domainChatStorage.AuthToken{}
+	for hash, tok := range s.tokens {
+		if tok.userID == userID {
+			tokens = append(tokens, domainChatStorage.AuthToken{
+				UserID:    tok.userID,
+				TokenHash: hash,
+				ExpiresAt: tok.expiresAt,
+				CreatedAt: tok.createdAt,
+			})
+		}
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		if tokens[i].CreatedAt.Equal(tokens[j].CreatedAt) {
+			return tokens[i].TokenHash > tokens[j].TokenHash
+		}
+		return tokens[i].CreatedAt.After(tokens[j].CreatedAt)
+	})
+	return tokens, nil
+}
+
+func (s *authRepoStub) DeleteUserAuthTokens(userID int64) error {
+	for hash, tok := range s.tokens {
+		if tok.userID == userID {
+			delete(s.tokens, hash)
+		}
+	}
 	return nil
 }
 
@@ -208,4 +240,55 @@ func TestAuthMeRequiresUserInContext(t *testing.T) {
 	info, err := svc.Me(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "carol", info.Username)
+}
+
+func TestAuthSessionsAndLogoutAll(t *testing.T) {
+	saveAuthConfig()
+	repo := newAuthRepoStub()
+	svc := NewAuthService(repo)
+	ctx := domainChatStorage.ContextWithUser(context.Background(), &domainChatStorage.User{ID: 7, Username: "carol"})
+
+	// No user in context -> unauthorized.
+	_, err := svc.Sessions(context.Background())
+	require.ErrorIs(t, err, pkgError.ErrUnauthorized)
+	require.ErrorIs(t, svc.LogoutAll(context.Background()), pkgError.ErrUnauthorized)
+
+	// Seed one live and one expired session directly, with deterministic
+	// created_at so the newest-first ordering is stable.
+	require.NoError(t, repo.CreateAuthToken(hashAuthToken("live-token"), 7, time.Now().Add(time.Hour)))
+	require.NoError(t, repo.CreateAuthToken(hashAuthToken("dead-token"), 7, time.Now().Add(-time.Minute)))
+	now := time.Now()
+	repo.tokens[hashAuthToken("live-token")].createdAt = now
+	repo.tokens[hashAuthToken("dead-token")].createdAt = now.Add(-time.Minute)
+
+	sessions, err := svc.Sessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	for _, session := range sessions {
+		assert.Equal(t, 8, len(session.TokenID)-3, "token id must be masked: %q", session.TokenID)
+		assert.False(t, session.ExpiresAt.IsZero())
+		assert.False(t, session.CreatedAt.IsZero())
+	}
+	// The expired session is flagged; live one is not. Ordering is newest
+	// first, so the live session comes before the expired one.
+	assert.False(t, sessions[0].Expired)
+	assert.True(t, sessions[1].Expired)
+
+	// The masked id must not match the full digest.
+	for _, session := range sessions {
+		assert.NotEqual(t, hashAuthToken("live-token"), session.TokenID)
+		assert.NotEqual(t, hashAuthToken("dead-token"), session.TokenID)
+	}
+
+	// LogoutAll revokes every session of the user.
+	require.NoError(t, svc.LogoutAll(ctx))
+	sessions, err = svc.Sessions(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
+}
+
+func TestMaskAuthTokenHash(t *testing.T) {
+	assert.Equal(t, "cafebabe...", maskAuthTokenHash("cafebabe1234567890"))
+	assert.Equal(t, "short", maskAuthTokenHash("short"))
+	assert.Equal(t, "", maskAuthTokenHash(""))
 }

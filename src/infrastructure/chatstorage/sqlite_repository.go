@@ -1680,6 +1680,43 @@ func (r *SQLiteRepository) DeleteExpiredAuthTokens() error {
 	return err
 }
 
+// ListAuthTokens returns the auth token rows of a user, newest first. Callers
+// must never render TokenHash verbatim; expose a masked display id instead.
+func (r *SQLiteRepository) ListAuthTokens(userID int64) ([]domainChatStorage.AuthToken, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(`
+		SELECT id, user_id, token_hash, expires_at, created_at
+		FROM auth_tokens
+		WHERE user_id = ?
+		ORDER BY created_at DESC, id DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := []domainChatStorage.AuthToken{}
+	for rows.Next() {
+		var token domainChatStorage.AuthToken
+		if err := rows.Scan(&token.ID, &token.UserID, &token.TokenHash, &token.ExpiresAt, &token.CreatedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens, rows.Err()
+}
+
+// DeleteUserAuthTokens revokes every auth token of a user.
+func (r *SQLiteRepository) DeleteUserAuthTokens(userID int64) error {
+	if userID == 0 {
+		return nil
+	}
+	_, err := r.db.Exec("DELETE FROM auth_tokens WHERE user_id = ?", userID)
+	return err
+}
+
 // CountUserDevices reports how many device slots a user owns.
 func (r *SQLiteRepository) CountUserDevices(userID int64) (int, error) {
 	if userID == 0 {
@@ -2712,5 +2749,7 @@ func (r *SQLiteRepository) getMigrations() []string {
 		`ALTER TABLE devices ADD COLUMN owner_user_id INTEGER NOT NULL DEFAULT 0`,
 		// Migration 47: Resolve a user's device slots without a full-table scan
 		`CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices(owner_user_id)`,
+		// Migration 48: List/revoke a user's auth sessions without a full-table scan
+		`CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id, created_at)`,
 	}
 }

@@ -122,6 +122,10 @@ type IChatStorageRepository interface {
 	CreateAuthToken(tokenHash string, userID int64, expiresAt time.Time) error
 	DeleteAuthToken(tokenHash string) error
 	DeleteExpiredAuthTokens() error
+	// ListAuthTokens returns the auth token rows of a user, newest first.
+	ListAuthTokens(userID int64) ([]AuthToken, error)
+	// DeleteUserAuthTokens revokes every auth token of a user.
+	DeleteUserAuthTokens(userID int64) error
 	// CountUserDevices reports how many device slots are owned by a user.
 	CountUserDevices(userID int64) (int, error)
 	// SetDeviceOwner binds an unclaimed device slot to a user. It only claims

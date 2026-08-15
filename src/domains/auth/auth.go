@@ -29,6 +29,16 @@ type LoginResponse struct {
 	User      UserInfo  `json:"user"`
 }
 
+// SessionInfo is a masked view of one issued auth session. TokenID is the
+// prefix of the stored token digest, stable across calls but not usable as
+// a credential.
+type SessionInfo struct {
+	TokenID   string    `json:"token_id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Expired   bool      `json:"expired"`
+}
+
 type IAuthUsecase interface {
 	// Register creates a new user account when AuthAllowRegister is enabled.
 	Register(ctx context.Context, request RegisterRequest) (UserInfo, error)
@@ -36,6 +46,10 @@ type IAuthUsecase interface {
 	Login(ctx context.Context, request LoginRequest) (LoginResponse, error)
 	// Logout revokes the given token.
 	Logout(ctx context.Context, token string) error
+	// Sessions lists the authenticated user's active sessions (masked).
+	Sessions(ctx context.Context) ([]SessionInfo, error)
+	// LogoutAll revokes every session of the authenticated user.
+	LogoutAll(ctx context.Context) error
 	// Authenticate resolves a token to its user, or fails with ErrUnauthorized.
 	Authenticate(ctx context.Context, token string) (*domainChatStorage.User, error)
 	// AuthenticateBasic validates dashboard-style Basic credentials

@@ -371,6 +371,14 @@ func (r *deviceChatStorage) DeleteExpiredAuthTokens() error {
 	return r.base.DeleteExpiredAuthTokens()
 }
 
+func (r *deviceChatStorage) ListAuthTokens(userID int64) ([]domainChatStorage.AuthToken, error) {
+	return r.base.ListAuthTokens(userID)
+}
+
+func (r *deviceChatStorage) DeleteUserAuthTokens(userID int64) error {
+	return r.base.DeleteUserAuthTokens(userID)
+}
+
 func (r *deviceChatStorage) CountUserDevices(userID int64) (int, error) {
 	return r.base.CountUserDevices(userID)
 }

@@ -20,7 +20,9 @@ func InitRestAuth(app fiber.Router, service domainAuth.IAuthUsecase) Auth {
 	app.Post("/auth/register", authRateLimiter, rest.Register)
 	app.Post("/auth/login", authRateLimiter, rest.Login)
 	app.Post("/auth/logout", rest.Logout)
+	app.Post("/auth/logout-all", rest.LogoutAll)
 	app.Get("/auth/me", rest.Me)
+	app.Get("/auth/sessions", rest.Sessions)
 
 	return rest
 }
@@ -97,6 +99,30 @@ func (handler *Auth) Logout(c fiber.Ctx) error {
 		Code:    "SUCCESS",
 		Message: "Logged out",
 		Results: nil,
+	})
+}
+
+func (handler *Auth) LogoutAll(c fiber.Ctx) error {
+	err := handler.Service.LogoutAll(c.Context())
+	utils.PanicIfNeeded(err)
+
+	return c.JSON(utils.ResponseData{
+		Status:  200,
+		Code:    "SUCCESS",
+		Message: "All sessions revoked",
+		Results: nil,
+	})
+}
+
+func (handler *Auth) Sessions(c fiber.Ctx) error {
+	sessions, err := handler.Service.Sessions(c.Context())
+	utils.PanicIfNeeded(err)
+
+	return c.JSON(utils.ResponseData{
+		Status:  200,
+		Code:    "SUCCESS",
+		Message: "Active sessions",
+		Results: sessions,
 	})
 }
 

@@ -113,6 +113,48 @@ func (s *serviceAuth) Logout(_ context.Context, token string) error {
 	return s.storage.DeleteAuthToken(hashAuthToken(token))
 }
 
+// Sessions lists the authenticated user's sessions with masked token ids,
+// newest first, so clients can audit where tokens are active without any
+// usable credential leaving the server.
+func (s *serviceAuth) Sessions(ctx context.Context) ([]domainAuth.SessionInfo, error) {
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return nil, pkgError.ErrUnauthorized
+	}
+	if s.storage == nil {
+		return nil, fmt.Errorf("chat storage not initialized")
+	}
+
+	tokens, err := s.storage.ListAuthTokens(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	sessions := make([]domainAuth.SessionInfo, 0, len(tokens))
+	for _, token := range tokens {
+		sessions = append(sessions, domainAuth.SessionInfo{
+			TokenID:   maskAuthTokenHash(token.TokenHash),
+			CreatedAt: token.CreatedAt,
+			ExpiresAt: token.ExpiresAt,
+			Expired:   token.ExpiresAt.Before(now),
+		})
+	}
+	return sessions, nil
+}
+
+// LogoutAll revokes every session of the authenticated user, including the
+// one used for this request.
+func (s *serviceAuth) LogoutAll(ctx context.Context) error {
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return pkgError.ErrUnauthorized
+	}
+	if s.storage == nil {
+		return fmt.Errorf("chat storage not initialized")
+	}
+	return s.storage.DeleteUserAuthTokens(user.ID)
+}
+
 func (s *serviceAuth) Authenticate(_ context.Context, token string) (*domainChatStorage.User, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -192,4 +234,13 @@ func generateAuthToken() string {
 func hashAuthToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// maskAuthTokenHash renders a stable display id for a session row without
+// exposing the full stored digest: "cafebabe...".
+func maskAuthTokenHash(tokenHash string) string {
+	if len(tokenHash) <= 8 {
+		return tokenHash
+	}
+	return tokenHash[:8] + "..."
 }
