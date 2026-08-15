@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/whatsapp"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/middleware"
 	"github.com/gofiber/fiber/v3"
@@ -14,18 +16,26 @@ import (
 )
 
 // Register mounts the MCP streamable-HTTP endpoint at /mcp on the given
-// router (which already carries AppBasePath and the basic-auth middleware).
+// router (which already carries AppBasePath and the auth middleware).
 //
 // Device scoping mirrors REST: the X-Device-Id header picks the device for
 // the connection (empty resolves the default device, same as
 // DeviceMiddleware); a per-call device_id tool argument overrides it (see
 // resolveDeviceContext).
-func Register(router fiber.Router, dm *whatsapp.DeviceManager, deps Deps) {
+//
+// auth is optional; when config.AuthEnabled it is used to authenticate the
+// Bearer token so device resolution is scoped to the connection's user.
+func Register(router fiber.Router, dm *whatsapp.DeviceManager, deps Deps, auth ...middleware.TokenAuthenticator) {
 	// dm is typed here, but handlers take the deviceResolver interface;
 	// a nil *DeviceManager must become a nil interface, not a typed nil.
 	var resolver deviceResolver
 	if dm != nil {
 		resolver = dm
+	}
+
+	var authService middleware.TokenAuthenticator
+	if len(auth) > 0 {
+		authService = auth[0]
 	}
 
 	httpServer := server.NewStreamableHTTPServer(
@@ -46,6 +56,35 @@ func Register(router fiber.Router, dm *whatsapp.DeviceManager, deps Deps) {
 				return ctx
 			}
 			deviceID := strings.TrimSpace(r.Header.Get(middleware.DeviceIDHeader))
+
+			if config.AuthEnabled {
+				// Multi-user mode: authenticate the Bearer token and scope
+				// device resolution to that user. An unauthenticated request
+				// gets no device context, so tools surface "device
+				// identification required" instead of reaching another user's
+				// devices.
+				if authService == nil {
+					return ctx
+				}
+				token := middleware.BearerToken(r.Header.Get("Authorization"))
+				if token == "" {
+					logrus.Debugf("MCP auth required: no bearer token for device %q", deviceID)
+					return ctx
+				}
+				user, err := authService.Authenticate(ctx, token)
+				if err != nil || user == nil {
+					logrus.Debugf("MCP auth failed for device %q: %v", deviceID, err)
+					return ctx
+				}
+				ctx = domainChatStorage.ContextWithUser(ctx, user)
+				inst, _, err := dm.ResolveDeviceForUser(user.ID, deviceID)
+				if err != nil {
+					logrus.Debugf("MCP device resolution failed for %q: %v", deviceID, err)
+					return ctx
+				}
+				return whatsapp.ContextWithDevice(ctx, inst)
+			}
+
 			inst, _, err := dm.ResolveDevice(deviceID)
 			if err != nil {
 				// Leave the context empty; handlers surface a tool error

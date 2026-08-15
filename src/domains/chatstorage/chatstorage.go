@@ -2,6 +2,16 @@ package chatstorage
 
 import "time"
 
+// User represents an application account for multi-user mode. Devices are
+// owned by users (see DeviceRecord.OwnerUserID) and scoped accordingly.
+type User struct {
+	ID           int64     `db:"id"`
+	Username     string    `db:"username"`
+	PasswordHash string    `db:"password_hash"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
+}
+
 // Chat represents a WhatsApp chat/conversation
 type Chat struct {
 	DeviceID            string    `db:"device_id"`
@@ -137,8 +147,12 @@ type DeviceRecord struct {
 	WebhookSecret             string    `db:"webhook_secret"`
 	WebhookEvents             string    `db:"webhook_events"`
 	WebhookInsecureSkipVerify bool      `db:"webhook_insecure_skip_verify"`
-	CreatedAt                 time.Time `db:"created_at"`
-	UpdatedAt                 time.Time `db:"updated_at"`
+	// OwnerUserID is the id of the user that owns this device slot. 0 means
+	// unclaimed: the first user that resolves the device claims it (legacy
+	// single-user migration path).
+	OwnerUserID int64     `db:"owner_user_id"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
 }
 
 // DeviceWebhookConfig holds the complete webhook configuration for a device.

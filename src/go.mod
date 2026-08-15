@@ -24,6 +24,7 @@ require (
 	github.com/valyala/fasthttp v1.72.0
 	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/whatsmeow v0.0.0-20260813204424-197e61747d53
+	golang.org/x/crypto v0.55.0
 	golang.org/x/image v0.44.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.53.0
@@ -67,7 +68,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.mau.fi/util v0.9.12-0.20260717235539-f9ffa7eca58d // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

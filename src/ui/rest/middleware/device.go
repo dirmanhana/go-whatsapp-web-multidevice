@@ -5,12 +5,19 @@ import (
 	"strings"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/whatsapp"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/utils"
 	"github.com/gofiber/fiber/v3"
 )
 
 const DeviceIDHeader = "X-Device-Id"
+
+// isDevicesProbePath reports whether the path is the dashboard's auto-connect
+// probe (GET /devices, base-path aware).
+func isDevicesProbePath(path string) bool {
+	return path == "/devices" || path == config.AppBasePath+"/devices"
+}
 
 // DeviceMiddleware fetches a device instance by header (preferred), path param, or query param
 // and injects it into the context. It falls back to the default/only device for single-device mode.
@@ -40,7 +47,25 @@ func DeviceMiddleware(dm *whatsapp.DeviceManager) fiber.Handler {
 			deviceID = strings.TrimSpace(c.Query("device_id"))
 		}
 
-		instance, resolvedID, err := dm.ResolveDevice(deviceID)
+		// In multi-user mode a device must resolve for the authenticated user
+		// (unowned slots are claimed on first use). Without a user, requests
+		// are rejected: every device-scoped route sits behind AuthMiddleware.
+		// The only exception is the dashboard auto-connect probe: it calls
+		// GET /devices with no credentials to discover the server URL, and the
+		// handler returns an empty list for unauthenticated callers.
+		var instance *whatsapp.DeviceInstance
+		var resolvedID string
+		var err error
+		if user, ok := domainChatStorage.UserFromContext(c.Context()); ok && user != nil {
+			instance, resolvedID, err = dm.ResolveDeviceForUser(user.ID, deviceID)
+		} else if config.AuthEnabled {
+			if c.Method() == fiber.MethodGet && isDevicesProbePath(strings.TrimSpace(c.Path())) {
+				return c.Next()
+			}
+			return unauthorizedResponse(c)
+		} else {
+			instance, resolvedID, err = dm.ResolveDevice(deviceID)
+		}
 		if err != nil {
 			// ResolveDevice returns an ID when provided but missing; use it for payload clarity.
 			if resolvedID != "" || strings.TrimSpace(deviceID) != "" {

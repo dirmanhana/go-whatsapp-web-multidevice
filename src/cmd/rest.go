@@ -100,6 +100,12 @@ func restServer(_ *cobra.Command, _ []string) {
 		app.Post(webhookPath+"/:device_id", chatwootHandler.HandleDeviceWebhook)
 	}
 
+	// Browser WebSocket clients cannot set an Authorization header, so
+	// ?authorization=<base64(user:pass)> and ?token=<bearer> query params are
+	// restored into the header here. Runs unconditionally; it only acts on
+	// WebSocket upgrades.
+	app.Use(middleware.WebsocketQueryAuth())
+
 	if len(config.AppBasicAuthCredential) > 0 {
 		account := make(map[string]string)
 		for _, basicAuth := range config.AppBasicAuthCredential {
@@ -110,7 +116,6 @@ func restServer(_ *cobra.Command, _ []string) {
 			account[ba[0]] = ba[1]
 		}
 
-		app.Use(middleware.WebsocketQueryAuth())
 		app.Use(newBasicAuthMiddleware(account))
 	}
 
@@ -119,6 +124,13 @@ func restServer(_ *cobra.Command, _ []string) {
 	if config.AppBasePath != "" {
 		apiGroup = app.Group(config.AppBasePath)
 	}
+
+	// Multi-user bearer-token authentication. Public endpoints (landing page,
+	// /auth/register, /auth/login) pass through; everything else requires a
+	// valid token. Registered before any apiGroup route so the whole surface
+	// (REST, MCP, websocket, UI) is covered; routes registered earlier on the
+	// app itself (health, statics, chatwoot webhooks) are unaffected.
+	apiGroup.Use(middleware.AuthMiddleware(authUsecase))
 
 	registerDeviceScopedRoutes := func(r fiber.Router) {
 		rest.InitRestApp(r, appUsecase)
@@ -135,11 +147,16 @@ func restServer(_ *cobra.Command, _ []string) {
 	// Device management routes (no device_id required)
 	rest.InitRestDevice(apiGroup, deviceUsecase)
 
+	// Multi-user auth routes (public: register, login; token-protected: logout, me)
+	rest.InitRestAuth(apiGroup, authUsecase)
+
 	// App info (version, limits) for standalone UIs; no device required
 	rest.InitRestAppInfo(apiGroup)
 
 	// MCP endpoint — same usecase instances as REST, so both surfaces share
-	// one whatsmeow session. Sits behind the basic-auth middleware above.
+	// one whatsmeow session. Sits behind the basic-auth middleware above and
+	// the bearer-token middleware; the auth usecase additionally scopes MCP
+	// device resolution per user when AuthEnabled.
 	if config.McpEnabled {
 		uimcp.Register(apiGroup, dm, uimcp.Deps{
 			App:     appUsecase,
@@ -148,7 +165,7 @@ func restServer(_ *cobra.Command, _ []string) {
 			User:    userUsecase,
 			Message: messageUsecase,
 			Group:   groupUsecase,
-		})
+		}, authUsecase)
 	}
 
 	// Device-scoped operations (header-based)
@@ -172,6 +189,10 @@ func restServer(_ *cobra.Command, _ []string) {
 	uiCtx, uiCancel := context.WithCancel(context.Background())
 	defer uiCancel()
 	registerUIRoute(apiGroup, uiCtx)
+
+	// Device-scoped websocket broadcasts are filtered per owning user in
+	// multi-user mode.
+	websocket.SetDeviceOwnerResolver(dm.DeviceOwner)
 
 	go websocket.RunHub()
 

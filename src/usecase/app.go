@@ -345,12 +345,26 @@ func (service *serviceApp) FirstDevice(ctx context.Context) (response domainApp.
 	return devices[0], nil
 }
 
-func (service *serviceApp) FetchDevices(_ context.Context) (response []domainApp.DevicesResponse, err error) {
+func (service *serviceApp) FetchDevices(ctx context.Context) (response []domainApp.DevicesResponse, err error) {
 	if service.deviceManager == nil {
 		return response, fmt.Errorf("device manager not initialized")
 	}
 
+	// In multi-user mode only the authenticated user's devices (plus unclaimed
+	// legacy slots) are listed; without a user nothing is listed.
+	var user *domainChatStorage.User
+	if config.AuthEnabled {
+		var ok bool
+		user, ok = domainChatStorage.UserFromContext(ctx)
+		if !ok || user == nil {
+			return response, nil
+		}
+	}
+
 	for _, inst := range service.deviceManager.ListDevices() {
+		if user != nil && inst.Owner() != user.ID && inst.Owner() != 0 {
+			continue
+		}
 		inst.UpdateStateFromClient()
 		name := inst.DisplayName()
 		if name == "" {

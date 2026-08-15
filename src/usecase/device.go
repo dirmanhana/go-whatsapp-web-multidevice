@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
 	domainApp "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/app"
-	"github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	domainDevice "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/device"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/whatsapp"
 	pkgError "github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/error"
@@ -26,36 +27,91 @@ func NewDeviceService(manager *whatsapp.DeviceManager, app domainApp.IAppUsecase
 	}
 }
 
-func (s *serviceDevice) ListDevices(_ context.Context) ([]domainDevice.Device, error) {
+func (s *serviceDevice) ListDevices(ctx context.Context) ([]domainDevice.Device, error) {
 	if s.manager == nil {
 		return []domainDevice.Device{}, nil
 	}
 
+	// In multi-user mode only the authenticated user's devices (plus unclaimed
+	// legacy slots, which resolve to the first user that claims them) are
+	// visible; requests without a user see nothing.
+	var user *domainChatStorage.User
+	if config.AuthEnabled {
+		var ok bool
+		user, ok = domainChatStorage.UserFromContext(ctx)
+		if !ok || user == nil {
+			return []domainDevice.Device{}, nil
+		}
+	}
+
 	var result []domainDevice.Device
 	for _, inst := range s.manager.ListDevices() {
+		if user != nil && inst.Owner() != user.ID && inst.Owner() != 0 {
+			continue
+		}
 		inst.UpdateStateFromClient()
 		result = append(result, convertInstance(inst))
 	}
 	return result, nil
 }
 
-func (s *serviceDevice) GetDevice(_ context.Context, deviceID string) (*domainDevice.Device, error) {
+func (s *serviceDevice) GetDevice(ctx context.Context, deviceID string) (*domainDevice.Device, error) {
 	if s.manager == nil {
 		return nil, fmt.Errorf("device manager not initialized")
 	}
-	if inst, ok := s.manager.GetDevice(deviceID); ok {
+	if inst, ok := s.manager.GetDevice(deviceID); ok && userOwnsDevice(ctx, inst) {
 		device := convertInstance(inst)
 		return &device, nil
 	}
 	return nil, fmt.Errorf("device %s not found", deviceID)
 }
 
-func (s *serviceDevice) AddDevice(ctx context.Context, deviceID string, webhook *chatstorage.DeviceWebhookConfig) (*domainDevice.Device, error) {
+// userOwnsDevice reports whether the authenticated user may operate on a
+// device: their own slots and unclaimed legacy slots qualify; other users'
+// slots stay opaque. With auth disabled every caller qualifies (legacy mode).
+func userOwnsDevice(ctx context.Context, inst *whatsapp.DeviceInstance) bool {
+	if inst == nil {
+		return false
+	}
+	if !config.AuthEnabled {
+		return true
+	}
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return false
+	}
+	return inst.Owner() == user.ID || inst.Owner() == 0
+}
+
+func (s *serviceDevice) AddDevice(ctx context.Context, deviceID string, webhook *domainChatStorage.DeviceWebhookConfig) (*domainDevice.Device, error) {
 	if s.manager == nil {
 		return nil, fmt.Errorf("device manager not initialized")
 	}
 
-	inst, err := s.manager.CreateDevice(ctx, deviceID)
+	// Multi-user mode: every slot belongs to the authenticated user and each
+	// user is limited to AuthDeviceLimit slots.
+	var ownerUserID int64
+	if user, ok := domainChatStorage.UserFromContext(ctx); ok && user != nil {
+		ownerUserID = user.ID
+	} else if config.AuthEnabled {
+		return nil, pkgError.ErrUnauthorized
+	}
+
+	if ownerUserID != 0 && config.AuthDeviceLimit > 0 {
+		storage := s.manager.GetStorage()
+		if storage == nil {
+			return nil, fmt.Errorf("storage not available")
+		}
+		count, err := storage.CountUserDevices(ownerUserID)
+		if err != nil {
+			return nil, err
+		}
+		if count >= config.AuthDeviceLimit {
+			return nil, pkgError.ErrDeviceLimitReached
+		}
+	}
+
+	inst, err := s.manager.CreateDevice(ctx, deviceID, ownerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +144,11 @@ func (s *serviceDevice) RemoveDevice(ctx context.Context, deviceID string) error
 	}
 	if s.manager == nil {
 		return fmt.Errorf("device manager not initialized")
+	}
+	// Only the owning user may purge a slot (unclaimed legacy slots are
+	// claimable by the first user that operates on them).
+	if inst, ok := s.manager.GetDevice(deviceID); !ok || !userOwnsDevice(ctx, inst) {
+		return fmt.Errorf("device %s not found", deviceID)
 	}
 	// Deleting a device fully purges it: logs it out of WhatsApp, clears its session
 	// and chat data, then removes the slot from the registry. (Logout, in contrast,
@@ -124,18 +185,20 @@ func (s *serviceDevice) LogoutDevice(ctx context.Context, deviceID string) error
 		return fmt.Errorf("device manager not initialized")
 	}
 
+	// Only the owning user may logout a slot.
+	if inst, ok := s.manager.GetDevice(deviceID); !ok || !userOwnsDevice(ctx, inst) {
+		return fmt.Errorf("device %s not found", deviceID)
+	}
+
 	if err := s.manager.LogoutDeviceKeepSlot(ctx, deviceID); err != nil {
 		return err
 	}
 
 	// Broadcast the logout so UI clients can refresh. The device slot is kept, so it
 	// still appears in the list (disconnected) and can be re-paired under the same id.
-	var devices []domainDevice.Device
-	if s.manager != nil {
-		for _, inst := range s.manager.ListDevices() {
-			inst.UpdateStateFromClient()
-			devices = append(devices, convertInstance(inst))
-		}
+	devices, err := s.ListDevices(ctx)
+	if err != nil {
+		return err
 	}
 
 	websocket.Broadcast <- websocket.BroadcastMessage{
@@ -150,47 +213,49 @@ func (s *serviceDevice) LogoutDevice(ctx context.Context, deviceID string) error
 	return nil
 }
 
-func (s *serviceDevice) ReconnectDevice(_ context.Context, deviceID string) error {
+func (s *serviceDevice) ReconnectDevice(ctx context.Context, deviceID string) error {
 	if s.manager == nil {
 		return fmt.Errorf("device manager not initialized")
 	}
-	if inst, ok := s.manager.GetDevice(deviceID); ok {
-		client := inst.GetClient()
-		if client == nil {
-			return fmt.Errorf("device %s client not initialized", deviceID)
-		}
-
-		if client.Store == nil || client.Store.ID == nil {
-			return fmt.Errorf("device %s is not logged in (session deleted)", deviceID)
-		}
-
-		client.Disconnect()
-		return client.Connect()
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
+		return fmt.Errorf("device %s not found", deviceID)
 	}
-	return fmt.Errorf("device %s not found", deviceID)
+	client := inst.GetClient()
+	if client == nil {
+		return fmt.Errorf("device %s client not initialized", deviceID)
+	}
+
+	if client.Store == nil || client.Store.ID == nil {
+		return fmt.Errorf("device %s is not logged in (session deleted)", deviceID)
+	}
+
+	client.Disconnect()
+	return client.Connect()
 }
 
-func (s *serviceDevice) GetStatus(_ context.Context, deviceID string) (bool, bool, error) {
+func (s *serviceDevice) GetStatus(ctx context.Context, deviceID string) (bool, bool, error) {
 	if s.manager == nil {
 		return false, false, fmt.Errorf("device manager not initialized")
 	}
-	if inst, ok := s.manager.GetDevice(deviceID); ok {
-		inst.UpdateStateFromClient()
-		client := inst.GetClient()
-		if client == nil {
-			return false, false, nil
-		}
-
-		if client.Store == nil || client.Store.ID == nil {
-			return false, false, nil
-		}
-
-		// Update state snapshot based on live client flags
-		state := deriveState(inst)
-		_ = state
-		return client.IsConnected(), client.IsLoggedIn(), nil
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
+		return false, false, fmt.Errorf("device %s not found", deviceID)
 	}
-	return false, false, fmt.Errorf("device %s not found", deviceID)
+	inst.UpdateStateFromClient()
+	client := inst.GetClient()
+	if client == nil {
+		return false, false, nil
+	}
+
+	if client.Store == nil || client.Store.ID == nil {
+		return false, false, nil
+	}
+
+	// Update state snapshot based on live client flags
+	state := deriveState(inst)
+	_ = state
+	return client.IsConnected(), client.IsLoggedIn(), nil
 }
 
 // SetDeviceWebhook sets the webhook URL for a specific device.
@@ -199,8 +264,8 @@ func (s *serviceDevice) SetDeviceWebhook(ctx context.Context, deviceID string, w
 		return fmt.Errorf("device manager not initialized")
 	}
 
-	_, ok := s.manager.GetDevice(deviceID)
-	if !ok {
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
 		return pkgError.ErrDeviceNotFound
 	}
 
@@ -237,8 +302,8 @@ func (s *serviceDevice) GetDeviceWebhook(ctx context.Context, deviceID string) (
 		return "", fmt.Errorf("device manager not initialized")
 	}
 
-	_, ok := s.manager.GetDevice(deviceID)
-	if !ok {
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
 		return "", fmt.Errorf("device %s not found", deviceID)
 	}
 
@@ -261,13 +326,13 @@ func (s *serviceDevice) GetDeviceWebhook(ctx context.Context, deviceID string) (
 }
 
 // SetDeviceWebhookConfig sets the complete webhook configuration for a specific device.
-func (s *serviceDevice) SetDeviceWebhookConfig(ctx context.Context, deviceID string, config *chatstorage.DeviceWebhookConfig) error {
+func (s *serviceDevice) SetDeviceWebhookConfig(ctx context.Context, deviceID string, config *domainChatStorage.DeviceWebhookConfig) error {
 	if s.manager == nil {
 		return fmt.Errorf("device manager not initialized")
 	}
 
-	_, ok := s.manager.GetDevice(deviceID)
-	if !ok {
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
 		return pkgError.ErrDeviceNotFound
 	}
 
@@ -292,13 +357,13 @@ func (s *serviceDevice) SetDeviceWebhookConfig(ctx context.Context, deviceID str
 }
 
 // GetDeviceWebhookConfig retrieves the complete webhook configuration for a specific device.
-func (s *serviceDevice) GetDeviceWebhookConfig(ctx context.Context, deviceID string) (*chatstorage.DeviceWebhookConfig, error) {
+func (s *serviceDevice) GetDeviceWebhookConfig(ctx context.Context, deviceID string) (*domainChatStorage.DeviceWebhookConfig, error) {
 	if s.manager == nil {
 		return nil, fmt.Errorf("device manager not initialized")
 	}
 
-	_, ok := s.manager.GetDevice(deviceID)
-	if !ok {
+	inst, ok := s.manager.GetDevice(deviceID)
+	if !ok || !userOwnsDevice(ctx, inst) {
 		return nil, pkgError.ErrDeviceNotFound
 	}
 

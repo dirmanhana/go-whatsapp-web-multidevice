@@ -12,6 +12,7 @@ import (
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
 	domainApp "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/app"
+	domainAuth "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/auth"
 	domainCall "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/call"
 	domainChat "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
 	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
@@ -43,6 +44,7 @@ var (
 
 	// Usecase
 	appUsecase        domainApp.IAppUsecase
+	authUsecase       domainAuth.IAuthUsecase
 	callUsecase       domainCall.ICallUsecase
 	chatUsecase       domainChat.IChatUsecase
 	sendUsecase       domainSend.ISendUsecase
@@ -115,6 +117,24 @@ func initEnvConfig() {
 	}
 	if viper.GetString("mcp_enabled") != "" {
 		config.McpEnabled = viper.GetBool("mcp_enabled")
+	}
+
+	// Multi-user authentication settings
+	if viper.IsSet("auth_enabled") {
+		config.AuthEnabled = viper.GetBool("auth_enabled")
+	}
+	if viper.IsSet("auth_allow_register") {
+		config.AuthAllowRegister = viper.GetBool("auth_allow_register")
+	}
+	if viper.IsSet("auth_token_ttl") {
+		if ttl := viper.GetDuration("auth_token_ttl"); ttl > 0 {
+			config.AuthTokenTTL = ttl
+		}
+	}
+	if viper.IsSet("auth_device_limit") {
+		if limit := viper.GetInt("auth_device_limit"); limit >= 0 {
+			config.AuthDeviceLimit = limit
+		}
 	}
 	if viper.GetString("app_ui_auto_update") != "" {
 		config.AppUIAutoUpdate = viper.GetBool("app_ui_auto_update")
@@ -347,6 +367,32 @@ func initFlags() {
 		"cors-allowed-origins", "",
 		config.AppCORSAllowedOrigins,
 		`allowed CORS origins, any origin when empty --cors-allowed-origins <string> | example: --cors-allowed-origins="https://ui.example.com,https://ops.example.com"`,
+	)
+
+	// Multi-user authentication flags
+	rootCmd.PersistentFlags().BoolVarP(
+		&config.AuthEnabled,
+		"auth-enabled", "",
+		config.AuthEnabled,
+		`require per-user Bearer token authentication --auth-enabled <true/false> | example: --auth-enabled=true`,
+	)
+	rootCmd.PersistentFlags().BoolVarP(
+		&config.AuthAllowRegister,
+		"auth-allow-register", "",
+		config.AuthAllowRegister,
+		`allow open user registration via POST /auth/register --auth-allow-register <true/false> | example: --auth-allow-register=true`,
+	)
+	rootCmd.PersistentFlags().DurationVarP(
+		&config.AuthTokenTTL,
+		"auth-token-ttl", "",
+		config.AuthTokenTTL,
+		`issued auth token lifetime --auth-token-ttl <duration> | example: --auth-token-ttl=24h`,
+	)
+	rootCmd.PersistentFlags().IntVarP(
+		&config.AuthDeviceLimit,
+		"auth-device-limit", "",
+		config.AuthDeviceLimit,
+		`max WhatsApp device slots per user --auth-device-limit <int> | example: --auth-device-limit=3`,
 	)
 
 	// Web UI flags
@@ -692,6 +738,7 @@ func initApp() {
 
 	// Usecase
 	appUsecase = usecase.NewAppService(chatStorageRepo, dm)
+	authUsecase = usecase.NewAuthService(chatStorageRepo)
 	callUsecase = usecase.NewCallService()
 	chatUsecase = usecase.NewChatService(chatStorageRepo)
 	sendUsecase = usecase.NewSendService(appUsecase, chatStorageRepo)

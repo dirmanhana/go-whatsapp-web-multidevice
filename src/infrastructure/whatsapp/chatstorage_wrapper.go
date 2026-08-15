@@ -342,3 +342,39 @@ func (r *deviceChatStorage) SetDeviceWebhookConfig(deviceID string, config *doma
 func (r *deviceChatStorage) GetDeviceWebhookConfig(deviceID string) (*domainChatStorage.DeviceWebhookConfig, error) {
 	return r.base.GetDeviceWebhookConfig(deviceID)
 }
+
+func (r *deviceChatStorage) CreateUser(username, passwordHash string) (int64, error) {
+	return r.base.CreateUser(username, passwordHash)
+}
+
+func (r *deviceChatStorage) GetUserByUsername(username string) (*domainChatStorage.User, error) {
+	return r.base.GetUserByUsername(username)
+}
+
+func (r *deviceChatStorage) GetUserByID(id int64) (*domainChatStorage.User, error) {
+	return r.base.GetUserByID(id)
+}
+
+func (r *deviceChatStorage) GetUserByTokenHash(tokenHash string) (*domainChatStorage.User, error) {
+	return r.base.GetUserByTokenHash(tokenHash)
+}
+
+func (r *deviceChatStorage) CreateAuthToken(tokenHash string, userID int64, expiresAt time.Time) error {
+	return r.base.CreateAuthToken(tokenHash, userID, expiresAt)
+}
+
+func (r *deviceChatStorage) DeleteAuthToken(tokenHash string) error {
+	return r.base.DeleteAuthToken(tokenHash)
+}
+
+func (r *deviceChatStorage) DeleteExpiredAuthTokens() error {
+	return r.base.DeleteExpiredAuthTokens()
+}
+
+func (r *deviceChatStorage) CountUserDevices(userID int64) (int, error) {
+	return r.base.CountUserDevices(userID)
+}
+
+func (r *deviceChatStorage) SetDeviceOwner(deviceID string, ownerUserID int64) (bool, error) {
+	return r.base.SetDeviceOwner(deviceID, ownerUserID)
+}

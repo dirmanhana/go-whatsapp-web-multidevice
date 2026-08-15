@@ -58,6 +58,7 @@ func (m *DeviceManager) AddDevice(instance *DeviceInstance) {
 			DisplayName: instance.DisplayName(),
 			JID:         instance.JID(),
 			ADJID:       instance.ADJID(),
+			OwnerUserID: instance.Owner(),
 			CreatedAt:   instance.CreatedAt(),
 			UpdatedAt:   time.Now(),
 		})
@@ -185,6 +186,101 @@ func (m *DeviceManager) ResolveDevice(deviceID string) (*DeviceInstance, string,
 	}
 
 	return nil, "", fmt.Errorf("device id is required")
+}
+
+// ResolveDeviceForUser resolves a device the way ResolveDevice does, but
+// scoped to a user. An explicit device id must belong to the user (unowned
+// slots are claimed on first use, the legacy single-user migration path);
+// devices owned by another user resolve as not found so ownership stays
+// opaque. Without a device id the user's first device wins, falling back to
+// claiming the first unowned device.
+func (m *DeviceManager) ResolveDeviceForUser(userID int64, deviceID string) (*DeviceInstance, string, error) {
+	if m == nil {
+		return nil, "", fmt.Errorf("device manager not initialized")
+	}
+
+	trimmedID := strings.TrimSpace(deviceID)
+	if trimmedID != "" {
+		inst, ok := m.GetDevice(trimmedID)
+		if !ok || inst == nil {
+			inst, ok = m.getDeviceByJID(trimmedID)
+		}
+		if ok && inst != nil {
+			if err := m.claimDeviceForUser(inst, userID); err != nil {
+				return nil, trimmedID, err
+			}
+			return inst, inst.ID(), nil
+		}
+		return nil, trimmedID, fmt.Errorf("device %s not found", trimmedID)
+	}
+
+	for _, inst := range m.ListDevices() {
+		if inst.Owner() == userID {
+			return inst, inst.ID(), nil
+		}
+	}
+	for _, inst := range m.ListDevices() {
+		if inst.Owner() == 0 {
+			if err := m.claimDeviceForUser(inst, userID); err != nil {
+				return nil, "", err
+			}
+			return inst, inst.ID(), nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("device id is required")
+}
+
+// claimDeviceForUser binds an unowned device slot to the user. Slots owned by
+// another user are never claimed (they resolve as not found). Idempotent when
+// the slot already belongs to the user.
+func (m *DeviceManager) claimDeviceForUser(inst *DeviceInstance, userID int64) error {
+	if inst == nil {
+		return fmt.Errorf("device not found")
+	}
+	if owner := inst.Owner(); owner != 0 {
+		if owner != userID {
+			return fmt.Errorf("device %s not found", inst.ID())
+		}
+		return nil
+	}
+	if m.storage != nil {
+		claimed, err := m.storage.SetDeviceOwner(inst.ID(), userID)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			// Row-level claim failed (stale in-memory owner): re-read so the
+			// registry and storage stay consistent instead of claiming a slot
+			// another user just took.
+			rec, err := m.storage.GetDeviceRecord(inst.ID())
+			if err == nil && rec != nil && rec.OwnerUserID != 0 && rec.OwnerUserID != userID {
+				return fmt.Errorf("device %s not found", inst.ID())
+			}
+		}
+	}
+	inst.SetOwner(userID)
+	return nil
+}
+
+// DeviceOwner reports the owning user id of a device (0, false when unowned).
+// Used to scope websocket broadcasts per user.
+func (m *DeviceManager) DeviceOwner(deviceID string) (int64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	if inst, ok := m.GetDevice(deviceID); ok && inst != nil {
+		if owner := inst.Owner(); owner != 0 {
+			return owner, true
+		}
+	}
+	if m.storage != nil {
+		rec, err := m.storage.GetDeviceRecord(deviceID)
+		if err == nil && rec != nil && rec.OwnerUserID != 0 {
+			return rec.OwnerUserID, true
+		}
+	}
+	return 0, false
 }
 
 func (m *DeviceManager) RemoveDevice(id string) {
@@ -426,7 +522,8 @@ func (m *DeviceManager) resetDeviceKeepSlot(deviceID string) error {
 }
 
 // CreateDevice registers a new device placeholder so routes can be scoped strictly by device_id.
-func (m *DeviceManager) CreateDevice(ctx context.Context, requestedID string) (*DeviceInstance, error) {
+// ownerUserID (0 = unclaimed) binds the slot to a user in multi-user mode.
+func (m *DeviceManager) CreateDevice(ctx context.Context, requestedID string, ownerUserID int64) (*DeviceInstance, error) {
 	if m == nil {
 		return nil, fmt.Errorf("device manager not initialized")
 	}
@@ -444,6 +541,7 @@ func (m *DeviceManager) CreateDevice(ctx context.Context, requestedID string) (*
 	}
 
 	instance := NewDeviceInstance(id, nil, newDeviceChatStorage(id, m.storage))
+	instance.SetOwner(ownerUserID)
 	m.devices[id] = instance
 
 	if m.storage != nil {
@@ -451,6 +549,7 @@ func (m *DeviceManager) CreateDevice(ctx context.Context, requestedID string) (*
 			DeviceID:    id,
 			DisplayName: instance.DisplayName(),
 			JID:         instance.JID(),
+			OwnerUserID: ownerUserID,
 			CreatedAt:   instance.CreatedAt(),
 			UpdatedAt:   instance.CreatedAt(),
 		}); err != nil {
@@ -603,6 +702,7 @@ func (m *DeviceManager) persistInstanceRecord(inst *DeviceInstance) {
 		DisplayName: inst.DisplayName(),
 		JID:         inst.JID(),
 		ADJID:       inst.ADJID(),
+		OwnerUserID: inst.Owner(),
 		CreatedAt:   inst.CreatedAt(),
 		UpdatedAt:   time.Now(),
 	})
@@ -681,6 +781,7 @@ func (m *DeviceManager) loadFromRegistry(records []*domainChatStorage.DeviceReco
 		instance.displayName = rec.DisplayName
 		instance.jid = rec.JID
 		instance.adJID = rec.ADJID
+		instance.ownerUserID = rec.OwnerUserID
 
 		// If we had an existing device with client, transfer the client
 		if existingByJID != nil {

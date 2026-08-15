@@ -113,6 +113,22 @@ type IChatStorageRepository interface {
 	// GetDeviceWebhookConfig retrieves the full webhook configuration for a device.
 	GetDeviceWebhookConfig(deviceID string) (*DeviceWebhookConfig, error)
 
+	// User account operations (multi-user mode)
+	CreateUser(username, passwordHash string) (int64, error)
+	GetUserByUsername(username string) (*User, error)
+	GetUserByID(id int64) (*User, error)
+	// GetUserByTokenHash resolves the user owning a non-expired auth token.
+	GetUserByTokenHash(tokenHash string) (*User, error)
+	CreateAuthToken(tokenHash string, userID int64, expiresAt time.Time) error
+	DeleteAuthToken(tokenHash string) error
+	DeleteExpiredAuthTokens() error
+	// CountUserDevices reports how many device slots are owned by a user.
+	CountUserDevices(userID int64) (int, error)
+	// SetDeviceOwner binds an unclaimed device slot to a user. It only claims
+	// slots that are unowned or already owned by the same user, reporting
+	// whether the claim took effect.
+	SetDeviceOwner(deviceID string, ownerUserID int64) (bool, error)
+
 	// Schema operations
 	InitializeSchema() error
 }

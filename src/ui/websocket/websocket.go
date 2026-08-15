@@ -7,11 +7,16 @@ import (
 	"github.com/sirupsen/logrus"
 
 	domainApp "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/app"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/gofiber/contrib/v3/websocket"
 	"github.com/gofiber/fiber/v3"
 )
 
-type client struct{}
+type client struct {
+	// userID is the authenticated user owning this connection (0 when auth is
+	// disabled). Used to scope device broadcasts per user.
+	userID int64
+}
 
 type BroadcastMessage struct {
 	Code    string `json:"code"`
@@ -26,8 +31,21 @@ var (
 	Unregister = make(chan *websocket.Conn)
 )
 
+// deviceOwnerResolver, when set, reports the owning user id of a device.
+// Broadcasts carrying a device_id are only delivered to connections of that
+// device's owner. Set at startup via SetDeviceOwnerResolver.
+var deviceOwnerResolver func(deviceID string) (int64, bool)
+
+func SetDeviceOwnerResolver(resolver func(deviceID string) (int64, bool)) {
+	deviceOwnerResolver = resolver
+}
+
 func handleRegister(conn *websocket.Conn) {
-	Clients[conn] = client{}
+	var userID int64
+	if v, ok := conn.Locals("user_id").(int64); ok {
+		userID = v
+	}
+	Clients[conn] = client{userID: userID}
 	logrus.Println("connection registered")
 }
 
@@ -43,12 +61,31 @@ func broadcastMessage(message BroadcastMessage) {
 		return
 	}
 
-	for conn := range Clients {
+	deviceID, hasDeviceID := messageDeviceID(message)
+
+	for conn, cli := range Clients {
+		// A device-scoped broadcast goes only to connections of that device's
+		// owner; everything else reaches every connection.
+		if hasDeviceID && deviceID != "" && deviceOwnerResolver != nil {
+			if owner, owned := deviceOwnerResolver(deviceID); owned && cli.userID != owner {
+				continue
+			}
+		}
 		if err := conn.WriteMessage(websocket.TextMessage, marshalMessage); err != nil {
 			logrus.Println("write error:", err)
 			closeConnection(conn)
 		}
 	}
+}
+
+// messageDeviceID extracts a device_id from a broadcast's Result map.
+func messageDeviceID(message BroadcastMessage) (string, bool) {
+	result, ok := message.Result.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	deviceID, ok := result["device_id"].(string)
+	return deviceID, ok
 }
 
 func closeConnection(conn *websocket.Conn) {
@@ -109,14 +146,18 @@ func RegisterRoutes(app fiber.Router, service domainApp.IAppUsecase) {
 					return
 				}
 
-				if messageData.Code == "FETCH_DEVICES" {
-					devices, _ := service.FetchDevices(context.Background())
-					Broadcast <- BroadcastMessage{
-						Code:    "LIST_DEVICES",
-						Message: "Device found",
-						Result:  devices,
-					}
+if messageData.Code == "FETCH_DEVICES" {
+				ctx := context.Background()
+				if v, ok := conn.Locals("user_id").(int64); ok && v != 0 {
+					ctx = domainChatStorage.ContextWithUser(ctx, &domainChatStorage.User{ID: v})
 				}
+				devices, _ := service.FetchDevices(ctx)
+				Broadcast <- BroadcastMessage{
+					Code:    "LIST_DEVICES",
+					Message: "Device found",
+					Result:  devices,
+				}
+			}
 			} else {
 				logrus.Println("unsupported message type:", messageType)
 			}

@@ -1348,11 +1348,15 @@ func (r *SQLiteRepository) SaveDeviceRecord(record *domainChatStorage.DeviceReco
 	}
 	record.UpdatedAt = now
 
-	// Try update first, then insert if no rows affected (cross-db compatible)
+	// Try update first, then insert if no rows affected (cross-db compatible).
+	// Owner is only ever set here (never cleared): an empty OwnerUserID on an
+	// UPDATE preserves the existing owner, so callers that persist registry
+	// records without ownership (e.g. keep-slot logout) cannot wipe a claim.
 	result, err := r.db.Exec(`
-		UPDATE devices SET display_name = ?, jid = ?, ad_jid = ?, updated_at = ?
+		UPDATE devices SET display_name = ?, jid = ?, ad_jid = ?,
+			owner_user_id = CASE WHEN ? = 0 THEN owner_user_id ELSE ? END, updated_at = ?
 		WHERE device_id = ?
-	`, record.DisplayName, record.JID, record.ADJID, record.UpdatedAt, record.DeviceID)
+	`, record.DisplayName, record.JID, record.ADJID, record.OwnerUserID, record.OwnerUserID, record.UpdatedAt, record.DeviceID)
 	if err != nil {
 		return err
 	}
@@ -1360,9 +1364,9 @@ func (r *SQLiteRepository) SaveDeviceRecord(record *domainChatStorage.DeviceReco
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		_, err = r.db.Exec(`
-			INSERT INTO devices (device_id, display_name, jid, ad_jid, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, record.DeviceID, record.DisplayName, record.JID, record.ADJID, record.CreatedAt, record.UpdatedAt)
+			INSERT INTO devices (device_id, display_name, jid, ad_jid, owner_user_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, record.DeviceID, record.DisplayName, record.JID, record.ADJID, record.OwnerUserID, record.CreatedAt, record.UpdatedAt)
 	}
 	return err
 }
@@ -1370,7 +1374,7 @@ func (r *SQLiteRepository) SaveDeviceRecord(record *domainChatStorage.DeviceReco
 // ListDeviceRecords returns all registered devices.
 func (r *SQLiteRepository) ListDeviceRecords() ([]*domainChatStorage.DeviceRecord, error) {
 	rows, err := r.db.Query(`
-		SELECT device_id, display_name, jid, COALESCE(ad_jid, ''), created_at, updated_at
+		SELECT device_id, display_name, jid, COALESCE(ad_jid, ''), COALESCE(owner_user_id, 0), created_at, updated_at
 		FROM devices
 		ORDER BY created_at ASC
 	`)
@@ -1382,7 +1386,7 @@ func (r *SQLiteRepository) ListDeviceRecords() ([]*domainChatStorage.DeviceRecor
 	var records []*domainChatStorage.DeviceRecord
 	for rows.Next() {
 		var rec domainChatStorage.DeviceRecord
-		if err := rows.Scan(&rec.DeviceID, &rec.DisplayName, &rec.JID, &rec.ADJID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(&rec.DeviceID, &rec.DisplayName, &rec.JID, &rec.ADJID, &rec.OwnerUserID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 			return nil, err
 		}
 		records = append(records, &rec)
@@ -1399,11 +1403,11 @@ func (r *SQLiteRepository) GetDeviceRecord(deviceID string) (*domainChatStorage.
 
 	rec := &domainChatStorage.DeviceRecord{}
 	err := r.db.QueryRow(`
-		SELECT device_id, display_name, jid, COALESCE(ad_jid, ''), created_at, updated_at
+		SELECT device_id, display_name, jid, COALESCE(ad_jid, ''), COALESCE(owner_user_id, 0), created_at, updated_at
 		FROM devices
 		WHERE device_id = ?
 		LIMIT 1
-	`, deviceID).Scan(&rec.DeviceID, &rec.DisplayName, &rec.JID, &rec.ADJID, &rec.CreatedAt, &rec.UpdatedAt)
+	`, deviceID).Scan(&rec.DeviceID, &rec.DisplayName, &rec.JID, &rec.ADJID, &rec.OwnerUserID, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1577,6 +1581,131 @@ func (r *SQLiteRepository) GetDeviceWebhookConfig(deviceID string) (*domainChatS
 	}
 	config.WebhookURL = webhookURL
 	return &config, nil
+}
+
+// CreateUser registers a new account and returns its id.
+func (r *SQLiteRepository) CreateUser(username, passwordHash string) (int64, error) {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(passwordHash) == "" {
+		return 0, fmt.Errorf("username and password hash are required")
+	}
+
+	now := time.Now()
+	result, err := r.db.Exec(`
+		INSERT INTO users (username, password_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+	`, strings.TrimSpace(username), passwordHash, now, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetUserByUsername resolves an account by username (case-insensitive match).
+func (r *SQLiteRepository) GetUserByUsername(username string) (*domainChatStorage.User, error) {
+	if strings.TrimSpace(username) == "" {
+		return nil, nil
+	}
+	return r.scanUser(`
+		SELECT id, username, password_hash, created_at, updated_at
+		FROM users
+		WHERE LOWER(username) = LOWER(?)
+		LIMIT 1
+	`, strings.TrimSpace(username))
+}
+
+// GetUserByID resolves an account by id.
+func (r *SQLiteRepository) GetUserByID(id int64) (*domainChatStorage.User, error) {
+	if id == 0 {
+		return nil, nil
+	}
+	return r.scanUser(`
+		SELECT id, username, password_hash, created_at, updated_at
+		FROM users
+		WHERE id = ?
+		LIMIT 1
+	`, id)
+}
+
+// GetUserByTokenHash resolves the user owning a non-expired auth token.
+func (r *SQLiteRepository) GetUserByTokenHash(tokenHash string) (*domainChatStorage.User, error) {
+	if strings.TrimSpace(tokenHash) == "" {
+		return nil, nil
+	}
+	return r.scanUser(`
+		SELECT u.id, u.username, u.password_hash, u.created_at, u.updated_at
+		FROM auth_tokens t
+		JOIN users u ON u.id = t.user_id
+		WHERE t.token_hash = ? AND t.expires_at > ?
+		LIMIT 1
+	`, strings.TrimSpace(tokenHash), time.Now())
+}
+
+func (r *SQLiteRepository) scanUser(query string, args ...any) (*domainChatStorage.User, error) {
+	user := &domainChatStorage.User{}
+	err := r.db.QueryRow(query, args...).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// CreateAuthToken persists the SHA-256 digest of an issued token with its
+// expiry, so raw tokens are never stored.
+func (r *SQLiteRepository) CreateAuthToken(tokenHash string, userID int64, expiresAt time.Time) error {
+	if strings.TrimSpace(tokenHash) == "" || userID == 0 {
+		return fmt.Errorf("token hash and user id are required")
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at)
+		VALUES (?, ?, ?, ?)
+	`, userID, strings.TrimSpace(tokenHash), expiresAt, time.Now())
+	return err
+}
+
+// DeleteAuthToken revokes a token by its hash. Missing tokens are not an error.
+func (r *SQLiteRepository) DeleteAuthToken(tokenHash string) error {
+	if strings.TrimSpace(tokenHash) == "" {
+		return nil
+	}
+	_, err := r.db.Exec("DELETE FROM auth_tokens WHERE token_hash = ?", strings.TrimSpace(tokenHash))
+	return err
+}
+
+// DeleteExpiredAuthTokens removes every token whose expiry has passed.
+func (r *SQLiteRepository) DeleteExpiredAuthTokens() error {
+	_, err := r.db.Exec("DELETE FROM auth_tokens WHERE expires_at <= ?", time.Now())
+	return err
+}
+
+// CountUserDevices reports how many device slots a user owns.
+func (r *SQLiteRepository) CountUserDevices(userID int64) (int, error) {
+	if userID == 0 {
+		return 0, nil
+	}
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM devices WHERE owner_user_id = ?", userID).Scan(&count)
+	return count, err
+}
+
+// SetDeviceOwner binds an unclaimed device slot to a user. The claim only
+// takes effect when the slot is unowned or already owned by the same user
+// (row-level guard against racing claims); it reports whether it did.
+func (r *SQLiteRepository) SetDeviceOwner(deviceID string, ownerUserID int64) (bool, error) {
+	if strings.TrimSpace(deviceID) == "" || ownerUserID == 0 {
+		return false, fmt.Errorf("device id and owner user id are required")
+	}
+	result, err := r.db.Exec(`
+		UPDATE devices SET owner_user_id = ?
+		WHERE device_id = ? AND (owner_user_id = 0 OR owner_user_id = ?)
+	`, ownerUserID, strings.TrimSpace(deviceID), ownerUserID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
 }
 
 // GetChatNameWithPushName determines the appropriate name for a chat with pushname support
@@ -2563,5 +2692,25 @@ func (r *SQLiteRepository) getMigrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_chatwoot_links_conversation_account ON chatwoot_message_links(chatwoot_conversation_id, chatwoot_account_id, updated_at)`,
 		// Migration 43: Count/delete message links by owning config without a full-table scan
 		`CREATE INDEX IF NOT EXISTS idx_chatwoot_links_config ON chatwoot_message_links(chatwoot_config_id)`,
+		// Migration 44: User accounts for multi-user mode
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username VARCHAR(32) NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		// Migration 45: Bearer auth tokens (SHA-256 digest of the token, with expiry)
+		`CREATE TABLE IF NOT EXISTS auth_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token_hash VARCHAR(64) NOT NULL UNIQUE,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		// Migration 46: Per-device owner (0 = unclaimed; claimed on first use)
+		`ALTER TABLE devices ADD COLUMN owner_user_id INTEGER NOT NULL DEFAULT 0`,
+		// Migration 47: Resolve a user's device slots without a full-table scan
+		`CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices(owner_user_id)`,
 	}
 }

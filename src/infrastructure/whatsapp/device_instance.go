@@ -21,6 +21,7 @@ type DeviceInstance struct {
 	phoneNumber     string
 	jid             string // bare-number (NonAD) JID: chat storage / webhook partition key
 	adJID           string // full AD JID (number:NN@s.whatsapp.net): pins the exact companion session
+	ownerUserID     int64  // owning user id (0 = unclaimed, claimed on first use)
 	createdAt       time.Time
 	onLoggedOut     func(deviceID string) // Callback for remote logout cleanup
 
@@ -108,6 +109,20 @@ func (d *DeviceInstance) ADJID() string {
 
 func (d *DeviceInstance) CreatedAt() time.Time {
 	return d.createdAt
+}
+
+// Owner returns the id of the user that owns this device slot (0 = unclaimed).
+func (d *DeviceInstance) Owner() int64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.ownerUserID
+}
+
+// SetOwner binds this device slot to a user id (0 releases the claim).
+func (d *DeviceInstance) SetOwner(userID int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ownerUserID = userID
 }
 
 // SetClient attaches a WhatsApp client to this instance and updates metadata.

@@ -22,6 +22,10 @@ func (s *stubResolver) ResolveDevice(deviceID string) (*whatsapp.DeviceInstance,
 	return s.inst, deviceID, s.err
 }
 
+func (s *stubResolver) ResolveDeviceForUser(_ int64, deviceID string) (*whatsapp.DeviceInstance, string, error) {
+	return s.ResolveDevice(deviceID)
+}
+
 func callReq(args map[string]any) mcpg.CallToolRequest {
 	req := mcpg.CallToolRequest{}
 	req.Params.Arguments = args

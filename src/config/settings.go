@@ -33,6 +33,15 @@ var (
 	// the REST server. Streamable HTTP transport; inherits basic auth.
 	McpEnabled = true
 
+	// Multi-user authentication. When AuthEnabled, the REST/MCP/WS surfaces
+	// require a Bearer token issued by POST /auth/login (or /auth/register
+	// when AuthAllowRegister is enabled). Each user owns up to
+	// AuthDeviceLimit WhatsApp device slots, isolated from other users.
+	AuthEnabled       = true
+	AuthAllowRegister = true
+	AuthTokenTTL      = 24 * time.Hour
+	AuthDeviceLimit   = 3
+
 	PathQrCode    = "statics/qrcode"
 	PathSendItems = "statics/senditems"
 	PathMedia     = "statics/media"
