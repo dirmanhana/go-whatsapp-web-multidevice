@@ -64,6 +64,20 @@ func TestApplyAuthUIPatch_CopyNoLongerMentionsServerURL(t *testing.T) {
 	assert.NotContains(t, patched, "The server URL and optional basic-auth credentials are stored in this browser only.")
 }
 
+// TestApplyAuthUIPatch_LogoutOnlyOnCredentialFailure guards the axios
+// response interceptor: a non-auth 401 (e.g. WhatsApp disconnected →
+// SERVICE_UNAVAILABLE) must not mark the session as unauthorized.
+func TestApplyAuthUIPatch_LogoutOnlyOnCredentialFailure(t *testing.T) {
+	content := dashboardFixture(t)
+
+	patched := string(ApplyAuthUIPatch(content))
+
+	assert.Contains(t, patched, "t.code===`UNAUTHORIZED`&&eE.getState().markUnauthorized()",
+		"logout must only fire for genuine credential failures")
+	assert.NotContains(t, patched, "t.status===401&&eE.getState().markUnauthorized()",
+		"bare 401 must not trigger logout")
+}
+
 // TestApplyAuthUIPatch_LeavesUnknownBundleAlone guards graceful degradation:
 // when upstream changes the dashboard so a marker no longer matches, the
 // remaining patches must still apply and no partial marker may corrupt output.

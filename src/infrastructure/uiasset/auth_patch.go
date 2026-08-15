@@ -8,6 +8,10 @@
 //  3. Injects a self-contained register form (button + modal) that calls
 //     POST /auth/register and, on success, writes the dashboard's zustand
 //     localStorage state so the SPA boots straight into a connected session.
+//  4. Restricts the axios logout trigger to genuine credential failures
+//     (code UNAUTHORIZED) instead of every HTTP 401, so a temporarily
+//     disconnected WhatsApp device (SERVICE_UNAVAILABLE) no longer kicks the
+//     user back to the login page.
 //
 // The patch is applied at serve time (never to the cached file) and degrades
 // gracefully: if any marker string no longer matches an updated dashboard
@@ -29,6 +33,15 @@ const (
 
 	// loginSubmitOrigin forces the login probe to the page's own origin.
 	loginSubmitOrigin = "let n=await i(window.location.origin,s||void 0,l||void 0);"
+
+	// responseInterceptor is the axios response interceptor that logs the user
+	// out on ANY 401. gowa-ui marks the session as unauthorized on every 401,
+	// but non-auth endpoints also legitimately return 401-shaped errors (see
+	// the SERVICE_UNAVAILABLE mapping in pkg/error for the WhatsApp
+	// disconnected state). Only the auth middleware's UNAUTHORIZED code must
+	// trigger the logout.
+	responseInterceptor     = "let t=HT(e);return t.status===401&&eE.getState().markUnauthorized(),Promise.reject(t)"
+	responseInterceptorKeep = "let t=HT(e);return t.status===401&&t.code===`UNAUTHORIZED`&&eE.getState().markUnauthorized(),Promise.reject(t)"
 
 	// headerCopy is the login card subtitle that references the server URL.
 	headerCopy = "The server URL and optional basic-auth credentials are stored in this browser only."
@@ -105,6 +118,7 @@ func ApplyAuthUIPatch(content []byte) []byte {
 	}
 	patched := strings.ReplaceAll(string(content), serverURLField, "")
 	patched = strings.ReplaceAll(patched, loginSubmit, loginSubmitOrigin)
+	patched = strings.ReplaceAll(patched, responseInterceptor, responseInterceptorKeep)
 	patched = strings.ReplaceAll(patched, headerCopy, headerCopyPatched)
 	patched = strings.ReplaceAll(patched, "</body>", authUIInjection)
 	return []byte(patched)

@@ -83,11 +83,32 @@ func (err notFoundError) StatusCode() int {
 	return http.StatusNotFound
 }
 
+type serviceUnavailableError string
+
+func (err serviceUnavailableError) Error() string {
+	return string(err)
+}
+
+// ErrCode will return the error code based on the error data type
+func (err serviceUnavailableError) ErrCode() string {
+	return "SERVICE_UNAVAILABLE"
+}
+
+// StatusCode will return the HTTP status code based on the error data type
+func (err serviceUnavailableError) StatusCode() int {
+	return http.StatusServiceUnavailable
+}
+
 var (
 	ErrAlreadyLoggedIn = LoginError("you are already logged in.")
-	ErrNotConnected    = AuthError("you are not connect to services server, please reconnect")
-	ErrNotLoggedIn     = AuthError("you are not logged in")
-	ErrReconnect       = AuthError("reconnect error")
+	// ErrNotConnected, ErrNotLoggedIn and ErrReconnect describe the WhatsApp
+	// service state (disconnected / no session / connect failure), not the
+	// caller's credentials. They must NOT be 401: the browser dashboard logs
+	// the user out on any 401, so a temporarily disconnected device would
+	// otherwise kick users back to the login page.
+	ErrNotConnected    = serviceUnavailableError("you are not connect to services server, please reconnect")
+	ErrNotLoggedIn     = serviceUnavailableError("you are not logged in")
+	ErrReconnect       = serviceUnavailableError("reconnect error")
 	ErrQrChannel       = qrChannelError("QR channel error")
 	ErrSessionSaved   = sessionSavedError("your session have been saved, please wait to connect 2 second and refresh again")
 	ErrDeviceNotFound = notFoundError("device not found")
