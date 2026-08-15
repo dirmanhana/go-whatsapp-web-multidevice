@@ -41,6 +41,11 @@ var (
 	AuthAllowRegister = true
 	AuthTokenTTL      = 24 * time.Hour
 	AuthDeviceLimit   = 3
+	// AuthRateLimitMax caps failed login/register attempts per IP within
+	// AuthRateLimitWindow before the endpoint returns 429. 0 disables the
+	// limiter (not recommended).
+	AuthRateLimitMax    = 10
+	AuthRateLimitWindow = 15 * time.Minute
 
 	PathQrCode    = "statics/qrcode"
 	PathSendItems = "statics/senditems"

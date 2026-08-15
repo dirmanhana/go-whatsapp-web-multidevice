@@ -136,6 +136,16 @@ func initEnvConfig() {
 			config.AuthDeviceLimit = limit
 		}
 	}
+	if viper.IsSet("auth_rate_limit_max") {
+		if max := viper.GetInt("auth_rate_limit_max"); max >= 0 {
+			config.AuthRateLimitMax = max
+		}
+	}
+	if viper.IsSet("auth_rate_limit_window") {
+		if window := viper.GetDuration("auth_rate_limit_window"); window > 0 {
+			config.AuthRateLimitWindow = window
+		}
+	}
 	if viper.GetString("app_ui_auto_update") != "" {
 		config.AppUIAutoUpdate = viper.GetBool("app_ui_auto_update")
 	}
@@ -393,6 +403,18 @@ func initFlags() {
 		"auth-device-limit", "",
 		config.AuthDeviceLimit,
 		`max WhatsApp device slots per user --auth-device-limit <int> | example: --auth-device-limit=3`,
+	)
+	rootCmd.PersistentFlags().IntVarP(
+		&config.AuthRateLimitMax,
+		"auth-rate-limit-max", "",
+		config.AuthRateLimitMax,
+		`failed login/register attempts per IP before 429; 0 disables --auth-rate-limit-max <int> | example: --auth-rate-limit-max=10`,
+	)
+	rootCmd.PersistentFlags().DurationVarP(
+		&config.AuthRateLimitWindow,
+		"auth-rate-limit-window", "",
+		config.AuthRateLimitWindow,
+		`rate limit window for failed login/register attempts --auth-rate-limit-window <duration> | example: --auth-rate-limit-window=15m`,
 	)
 
 	// Web UI flags

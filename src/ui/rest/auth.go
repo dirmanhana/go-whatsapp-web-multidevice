@@ -15,8 +15,10 @@ type Auth struct {
 func InitRestAuth(app fiber.Router, service domainAuth.IAuthUsecase) Auth {
 	rest := Auth{Service: service}
 
-	app.Post("/auth/register", rest.Register)
-	app.Post("/auth/login", rest.Login)
+	authRateLimiter := middleware.AuthRateLimiter(config.AuthRateLimitMax, config.AuthRateLimitWindow)
+
+	app.Post("/auth/register", authRateLimiter, rest.Register)
+	app.Post("/auth/login", authRateLimiter, rest.Login)
 	app.Post("/auth/logout", rest.Logout)
 	app.Get("/auth/me", rest.Me)
 
