@@ -66,12 +66,7 @@ func Register(router fiber.Router, dm *whatsapp.DeviceManager, deps Deps, auth .
 				if authService == nil {
 					return ctx
 				}
-				token := middleware.BearerToken(r.Header.Get("Authorization"))
-				if token == "" {
-					logrus.Debugf("MCP auth required: no bearer token for device %q", deviceID)
-					return ctx
-				}
-				user, err := authService.Authenticate(ctx, token)
+				user, err := authenticateMCPUser(ctx, authService, r.Header.Get("Authorization"))
 				if err != nil || user == nil {
 					logrus.Debugf("MCP auth failed for device %q: %v", deviceID, err)
 					return ctx
@@ -103,4 +98,25 @@ func Register(router fiber.Router, dm *whatsapp.DeviceManager, deps Deps, auth .
 	// unmounted method is equivalent and keeps the route surface narrow.
 	router.Post("/mcp", handler)
 	router.Delete("/mcp", handler)
+}
+
+// authenticateMCPUser resolves the request's identity like the REST
+// AuthMiddleware: a Bearer token first, then Basic credentials, so both
+// programmatic MCP clients and dashboard-style Basic auth work identically
+// on every surface. A nil auth service or missing/empty credentials yields
+// a nil user without error (the caller decides how to react).
+func authenticateMCPUser(ctx context.Context, auth middleware.TokenAuthenticator, authorization string) (*domainChatStorage.User, error) {
+	if auth == nil {
+		return nil, nil
+	}
+	if token := middleware.BearerToken(authorization); token != "" {
+		return auth.Authenticate(ctx, token)
+	}
+	if basic, ok := auth.(middleware.BasicAuthenticator); ok {
+		username, password := middleware.BasicCredentials(authorization)
+		if username != "" {
+			return basic.AuthenticateBasic(ctx, username, password)
+		}
+	}
+	return nil, nil
 }
