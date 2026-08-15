@@ -107,4 +107,5 @@ var (
 	ErrForbidden           = ForbiddenError("insufficient permissions: admin access required")
 	ErrUserDisabled        = UserDisabledError("account is disabled by the administrator")
 	ErrCannotDisableSelf   = ForbiddenError("an admin cannot disable their own account")
+	ErrEmailAlreadyExists  = UserAlreadyExistsError("email is already registered")
 )

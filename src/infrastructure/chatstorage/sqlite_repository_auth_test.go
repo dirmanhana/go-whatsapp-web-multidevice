@@ -10,7 +10,7 @@ import (
 func TestUserAndTokenRoundTrip(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 
-	id, err := repo.CreateUser("alice", "hash-of-password")
+	id, err := repo.CreateUser("alice", "", "hash-of-password")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestUserAndTokenRoundTrip(t *testing.T) {
 	}
 
 	// Duplicate username is rejected by the unique index
-	if _, err := repo.CreateUser("alice", "other-hash"); err == nil {
+	if _, err := repo.CreateUser("alice", "", "other-hash"); err == nil {
 		t.Fatal("expected duplicate username to fail")
 	}
 
@@ -74,7 +74,7 @@ func TestUserAndTokenRoundTrip(t *testing.T) {
 func TestDeleteExpiredAuthTokens(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 
-	id, err := repo.CreateUser("bob", "hash")
+	id, err := repo.CreateUser("bob", "", "hash")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestDeleteExpiredAuthTokens(t *testing.T) {
 func TestListAndDeleteUserAuthTokens(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 
-	id, err := repo.CreateUser("erin", "hash")
+	id, err := repo.CreateUser("erin", "", "hash")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestListAndDeleteUserAuthTokens(t *testing.T) {
 	}
 
 	// Listing is scoped per user: another user sees nothing.
-	otherID, err := repo.CreateUser("frank", "hash")
+	otherID, err := repo.CreateUser("frank", "", "hash")
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}
@@ -165,11 +165,11 @@ func TestAdminAndUserManagement(t *testing.T) {
 		t.Fatalf("expected 0 users, got %d (err=%v)", count, err)
 	}
 
-	aliceID, err := repo.CreateUser("alice", "hash")
+	aliceID, err := repo.CreateUser("alice", "", "hash")
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	if _, err := repo.CreateUser("bob", "hash"); err != nil {
+	if _, err := repo.CreateUser("bob", "", "hash"); err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
 
@@ -232,6 +232,64 @@ func TestAdminAndUserManagement(t *testing.T) {
 	}
 }
 
+func TestUserEmailRoundTrip(t *testing.T) {
+	repo := newTestSQLiteRepository(t)
+
+	id, err := repo.CreateUser("alice", "alice@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user with email: %v", err)
+	}
+
+	// Email lookup is case-insensitive.
+	user, err := repo.GetUserByEmail("ALICE@Example.COM")
+	if err != nil || user == nil {
+		t.Fatalf("email lookup failed: user=%+v err=%v", user, err)
+	}
+	if user.ID != id || user.Email != "alice@example.com" {
+		t.Fatalf("unexpected user: %+v", user)
+	}
+
+	// The email survives every lookup path.
+	for _, lookup := range []func() (*domainChatStorage.User, error){
+		func() (*domainChatStorage.User, error) { return repo.GetUserByUsername("alice") },
+		func() (*domainChatStorage.User, error) { return repo.GetUserByID(id) },
+	} {
+		u, err := lookup()
+		if err != nil || u == nil {
+			t.Fatalf("expected user, got %+v err=%v", u, err)
+		}
+		if u.Email != "alice@example.com" {
+			t.Fatalf("expected email in user, got %+v", u)
+		}
+	}
+
+	// Duplicate email is rejected by the partial unique index.
+	if _, err := repo.CreateUser("alice2", "alice@example.com", "hash2"); err == nil {
+		t.Fatal("expected duplicate email to fail")
+	}
+
+	// Empty email is the legacy default; multiple legacy users share it.
+	if _, err := repo.CreateUser("bob", "", "hash"); err != nil {
+		t.Fatalf("create legacy user: %v", err)
+	}
+	if user, _ := repo.GetUserByEmail(""); user != nil {
+		t.Fatal("empty email must not resolve a user")
+	}
+
+	// ListUsers carries the email.
+	users, err := repo.ListUsers()
+	if err != nil || len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d (err=%v)", len(users), err)
+	}
+	emails := map[string]string{}
+	for _, u := range users {
+		emails[u.Username] = u.Email
+	}
+	if emails["alice"] != "alice@example.com" || emails["bob"] != "" {
+		t.Fatalf("unexpected emails: %+v", emails)
+	}
+}
+
 func TestDeviceOwnerClaim(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 
@@ -242,7 +300,7 @@ func TestDeviceOwnerClaim(t *testing.T) {
 		t.Fatalf("save device record: %v", err)
 	}
 
-	userID, err := repo.CreateUser("carol", "hash")
+	userID, err := repo.CreateUser("carol", "", "hash")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -257,7 +315,7 @@ func TestDeviceOwnerClaim(t *testing.T) {
 	}
 
 	// A second user cannot steal the claim
-	otherID, err := repo.CreateUser("dave", "hash")
+	otherID, err := repo.CreateUser("dave", "", "hash")
 	if err != nil {
 		t.Fatalf("create other user: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,12 +40,29 @@ func (s *serviceAuth) Register(ctx context.Context, request domainAuth.RegisterR
 	}
 
 	username := strings.TrimSpace(request.Username)
+	email := strings.TrimSpace(request.Email)
+
+	// Self-service registration: a username is derived from the email's local
+	// part when the client only sends email + password.
+	if username == "" {
+		username = s.deriveUsernameFromEmail(email)
+	}
+
 	existing, err := s.storage.GetUserByUsername(username)
 	if err != nil {
 		return info, err
 	}
 	if existing != nil {
 		return info, pkgError.ErrUserAlreadyExists
+	}
+	if email != "" {
+		existingByEmail, err := s.storage.GetUserByEmail(email)
+		if err != nil {
+			return info, err
+		}
+		if existingByEmail != nil {
+			return info, pkgError.ErrEmailAlreadyExists
+		}
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
@@ -60,7 +78,7 @@ func (s *serviceAuth) Register(ctx context.Context, request domainAuth.RegisterR
 	}
 	isAdmin := userCount == 0 || matchesAdminUsername(username)
 
-	id, err := s.storage.CreateUser(username, string(passwordHash))
+	id, err := s.storage.CreateUser(username, email, string(passwordHash))
 	if err != nil {
 		return info, err
 	}
@@ -70,7 +88,7 @@ func (s *serviceAuth) Register(ctx context.Context, request domainAuth.RegisterR
 		}
 	}
 
-	return domainAuth.UserInfo{ID: id, Username: username, DeviceCount: 0, IsAdmin: isAdmin}, nil
+	return domainAuth.UserInfo{ID: id, Username: username, Email: email, DeviceCount: 0, IsAdmin: isAdmin}, nil
 }
 
 func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest) (domainAuth.LoginResponse, error) {
@@ -82,9 +100,17 @@ func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest
 		return response, fmt.Errorf("chat storage not initialized")
 	}
 
-	user, err := s.storage.GetUserByUsername(strings.TrimSpace(request.Username))
+	identifier := strings.TrimSpace(request.Username)
+	user, err := s.storage.GetUserByUsername(identifier)
 	if err != nil {
 		return response, err
+	}
+	if user == nil {
+		// The identifier may also be the registered email.
+		user, err = s.storage.GetUserByEmail(identifier)
+		if err != nil {
+			return response, err
+		}
 	}
 	if user == nil {
 		return response, pkgError.ErrInvalidCredentials
@@ -121,6 +147,7 @@ func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest
 		User: domainAuth.UserInfo{
 			ID:          user.ID,
 			Username:    user.Username,
+			Email:       user.Email,
 			DeviceCount: deviceCount,
 			IsAdmin:     user.IsAdmin,
 		},
@@ -217,6 +244,13 @@ func (s *serviceAuth) AuthenticateBasic(_ context.Context, username, password st
 		return nil, err
 	}
 	if user == nil {
+		// The identifier may also be the registered email.
+		user, err = s.storage.GetUserByEmail(username)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if user == nil {
 		return nil, pkgError.ErrUnauthorized
 	}
 	if user.Disabled {
@@ -244,6 +278,7 @@ func (s *serviceAuth) Me(ctx context.Context) (domainAuth.UserInfo, error) {
 	return domainAuth.UserInfo{
 		ID:          user.ID,
 		Username:    user.Username,
+		Email:       user.Email,
 		DeviceCount: deviceCount,
 		IsAdmin:     user.IsAdmin,
 	}, nil
@@ -268,6 +303,7 @@ func (s *serviceAuth) ListUsers(ctx context.Context) ([]domainAuth.AdminUserInfo
 		result = append(result, domainAuth.AdminUserInfo{
 			ID:          user.ID,
 			Username:    user.Username,
+			Email:       user.Email,
 			IsAdmin:     user.IsAdmin,
 			Disabled:    user.Disabled,
 			DeviceCount: deviceCount,
@@ -320,6 +356,47 @@ func (s *serviceAuth) requireAdmin(ctx context.Context) (*domainChatStorage.User
 // never matches, so bootstrap falls back to the first registered user.
 func matchesAdminUsername(username string) bool {
 	return config.AuthAdminUsername != "" && strings.EqualFold(strings.TrimSpace(username), strings.TrimSpace(config.AuthAdminUsername))
+}
+
+// deriveUsernameFromEmail builds a valid unique username from an email's
+// local part: invalid characters are dropped, the result is capped at 32
+// chars, and a numeric suffix is appended until it is free.
+func (s *serviceAuth) deriveUsernameFromEmail(email string) string {
+	at := strings.IndexByte(email, '@')
+	local := email
+	if at >= 0 {
+		local = email[:at]
+	}
+
+	// Keep only the characters allowed by the username pattern.
+	var b strings.Builder
+	for _, r := range local {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	base := strings.Trim(b.String(), "._-")
+	if base == "" {
+		base = "user"
+	}
+	if len(base) > 32 {
+		base = base[:32]
+	}
+
+	// Append a numeric suffix until the name is free.
+	candidate := base
+	for suffix := 2; ; suffix++ {
+		existing, err := s.storage.GetUserByUsername(candidate)
+		if err != nil || existing == nil {
+			return candidate
+		}
+		// Leave room for the widest suffix while staying under 32 chars.
+		prefix := base
+		if len(prefix) > 32-len(strconv.Itoa(suffix)) {
+			prefix = prefix[:32-len(strconv.Itoa(suffix))]
+		}
+		candidate = fmt.Sprintf("%s%d", prefix, suffix)
+	}
 }
 
 // generateAuthToken returns a 64-char hex token (32 random bytes). Only the

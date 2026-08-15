@@ -1583,17 +1583,18 @@ func (r *SQLiteRepository) GetDeviceWebhookConfig(deviceID string) (*domainChatS
 	return &config, nil
 }
 
-// CreateUser registers a new account and returns its id.
-func (r *SQLiteRepository) CreateUser(username, passwordHash string) (int64, error) {
+// CreateUser registers a new account and returns its id. Email may be empty
+// for legacy username-only accounts; otherwise it must be unique.
+func (r *SQLiteRepository) CreateUser(username, email, passwordHash string) (int64, error) {
 	if strings.TrimSpace(username) == "" || strings.TrimSpace(passwordHash) == "" {
 		return 0, fmt.Errorf("username and password hash are required")
 	}
 
 	now := time.Now()
 	result, err := r.db.Exec(`
-		INSERT INTO users (username, password_hash, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-	`, strings.TrimSpace(username), passwordHash, now, now)
+		INSERT INTO users (username, email, password_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, strings.TrimSpace(username), strings.TrimSpace(email), passwordHash, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -1606,11 +1607,24 @@ func (r *SQLiteRepository) GetUserByUsername(username string) (*domainChatStorag
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
+		SELECT id, username, email, password_hash, is_admin, disabled, created_at, updated_at
 		FROM users
 		WHERE LOWER(username) = LOWER(?)
 		LIMIT 1
 	`, strings.TrimSpace(username))
+}
+
+// GetUserByEmail resolves an account by email (case-insensitive match).
+func (r *SQLiteRepository) GetUserByEmail(email string) (*domainChatStorage.User, error) {
+	if strings.TrimSpace(email) == "" {
+		return nil, nil
+	}
+	return r.scanUser(`
+		SELECT id, username, email, password_hash, is_admin, disabled, created_at, updated_at
+		FROM users
+		WHERE LOWER(email) = LOWER(?)
+		LIMIT 1
+	`, strings.TrimSpace(email))
 }
 
 // GetUserByID resolves an account by id.
@@ -1619,7 +1633,7 @@ func (r *SQLiteRepository) GetUserByID(id int64) (*domainChatStorage.User, error
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
+		SELECT id, username, email, password_hash, is_admin, disabled, created_at, updated_at
 		FROM users
 		WHERE id = ?
 		LIMIT 1
@@ -1632,7 +1646,7 @@ func (r *SQLiteRepository) GetUserByTokenHash(tokenHash string) (*domainChatStor
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT u.id, u.username, u.password_hash, u.is_admin, u.disabled, u.created_at, u.updated_at
+		SELECT u.id, u.username, u.email, u.password_hash, u.is_admin, u.disabled, u.created_at, u.updated_at
 		FROM auth_tokens t
 		JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND t.expires_at > ?
@@ -1642,7 +1656,7 @@ func (r *SQLiteRepository) GetUserByTokenHash(tokenHash string) (*domainChatStor
 
 func (r *SQLiteRepository) scanUser(query string, args ...any) (*domainChatStorage.User, error) {
 	user := &domainChatStorage.User{}
-	err := r.db.QueryRow(query, args...).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt)
+	err := r.db.QueryRow(query, args...).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1774,7 +1788,7 @@ func (r *SQLiteRepository) SetUserDisabled(userID int64, disabled bool) error {
 // ListUsers returns all accounts, ordered by id.
 func (r *SQLiteRepository) ListUsers() ([]domainChatStorage.User, error) {
 	rows, err := r.db.Query(`
-		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
+		SELECT id, username, email, password_hash, is_admin, disabled, created_at, updated_at
 		FROM users
 		ORDER BY id
 	`)
@@ -1786,7 +1800,7 @@ func (r *SQLiteRepository) ListUsers() ([]domainChatStorage.User, error) {
 	users := []domainChatStorage.User{}
 	for rows.Next() {
 		var user domainChatStorage.User
-		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, user)
@@ -2804,5 +2818,9 @@ func (r *SQLiteRepository) getMigrations() []string {
 		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
 		// Migration 50: Account disable toggle (banned users keep their row)
 		`ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`,
+		// Migration 51: Email for self-service registration ('' = legacy username-only account)
+		`ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL DEFAULT ''`,
+		// Migration 52: One account per email; legacy accounts share the empty default
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email <> ''`,
 	}
 }

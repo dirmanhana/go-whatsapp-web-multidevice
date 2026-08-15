@@ -8,11 +8,18 @@ import (
 )
 
 type RegisterRequest struct {
+	// Email enables self-service registration: an account can be created
+	// with email + password only, and the username is derived from the
+	// email's local part. May be empty for legacy username-only clients.
+	Email string `json:"email"`
+	// Username is optional when Email is present (derived from it).
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
 type LoginRequest struct {
+	// Username doubles as the login identifier: either the username or the
+	// registered email is accepted.
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -20,6 +27,7 @@ type LoginRequest struct {
 type UserInfo struct {
 	ID          int64  `json:"id"`
 	Username    string `json:"username"`
+	Email       string `json:"email"`
 	DeviceCount int    `json:"device_count"`
 	IsAdmin     bool   `json:"is_admin"`
 }
@@ -29,6 +37,7 @@ type UserInfo struct {
 type AdminUserInfo struct {
 	ID          int64     `json:"id"`
 	Username    string    `json:"username"`
+	Email       string    `json:"email"`
 	IsAdmin     bool      `json:"is_admin"`
 	Disabled    bool      `json:"disabled"`
 	DeviceCount int       `json:"device_count"`

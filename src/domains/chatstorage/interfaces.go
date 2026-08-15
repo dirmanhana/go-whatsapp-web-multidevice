@@ -114,8 +114,11 @@ type IChatStorageRepository interface {
 	GetDeviceWebhookConfig(deviceID string) (*DeviceWebhookConfig, error)
 
 	// User account operations (multi-user mode)
-	CreateUser(username, passwordHash string) (int64, error)
+	CreateUser(username, email, passwordHash string) (int64, error)
 	GetUserByUsername(username string) (*User, error)
+	// GetUserByEmail resolves an account by email (case-insensitive match).
+	// Legacy username-only accounts have an empty email and never match.
+	GetUserByEmail(email string) (*User, error)
 	GetUserByID(id int64) (*User, error)
 	// GetUserByTokenHash resolves the user owning a non-expired auth token.
 	GetUserByTokenHash(tokenHash string) (*User, error)

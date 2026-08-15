@@ -7,6 +7,7 @@ import "time"
 type User struct {
 	ID           int64     `db:"id"`
 	Username     string    `db:"username"`
+	Email        string    `db:"email"`
 	PasswordHash string    `db:"password_hash"`
 	IsAdmin      bool      `db:"is_admin"`
 	Disabled     bool      `db:"disabled"`

@@ -343,12 +343,16 @@ func (r *deviceChatStorage) GetDeviceWebhookConfig(deviceID string) (*domainChat
 	return r.base.GetDeviceWebhookConfig(deviceID)
 }
 
-func (r *deviceChatStorage) CreateUser(username, passwordHash string) (int64, error) {
-	return r.base.CreateUser(username, passwordHash)
+func (r *deviceChatStorage) CreateUser(username, email, passwordHash string) (int64, error) {
+	return r.base.CreateUser(username, email, passwordHash)
 }
 
 func (r *deviceChatStorage) GetUserByUsername(username string) (*domainChatStorage.User, error) {
 	return r.base.GetUserByUsername(username)
+}
+
+func (r *deviceChatStorage) GetUserByEmail(email string) (*domainChatStorage.User, error) {
+	return r.base.GetUserByEmail(email)
 }
 
 func (r *deviceChatStorage) GetUserByID(id int64) (*domainChatStorage.User, error) {

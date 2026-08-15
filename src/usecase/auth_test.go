@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,21 +41,36 @@ func newAuthRepoStub() *authRepoStub {
 	}
 }
 
-func (s *authRepoStub) CreateUser(username, passwordHash string) (int64, error) {
+func (s *authRepoStub) CreateUser(username, email, passwordHash string) (int64, error) {
 	for _, u := range s.users {
 		if u.Username == username {
 			return 0, pkgError.ErrUserAlreadyExists
 		}
+		if email != "" && strings.EqualFold(u.Email, email) {
+			return 0, pkgError.ErrEmailAlreadyExists
+		}
 	}
 	id := s.nextUserID
 	s.nextUserID++
-	s.users[username] = &domainChatStorage.User{ID: id, Username: username, PasswordHash: passwordHash, CreatedAt: time.Now()}
+	s.users[username] = &domainChatStorage.User{ID: id, Username: username, Email: email, PasswordHash: passwordHash, CreatedAt: time.Now()}
 	return id, nil
 }
 
 func (s *authRepoStub) GetUserByUsername(username string) (*domainChatStorage.User, error) {
 	if u, ok := s.users[username]; ok {
 		return u, nil
+	}
+	return nil, nil
+}
+
+func (s *authRepoStub) GetUserByEmail(email string) (*domainChatStorage.User, error) {
+	if email == "" {
+		return nil, nil
+	}
+	for _, u := range s.users {
+		if strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
 	}
 	return nil, nil
 }
@@ -324,6 +340,80 @@ func TestMaskAuthTokenHash(t *testing.T) {
 	assert.Equal(t, "cafebabe...", maskAuthTokenHash("cafebabe1234567890"))
 	assert.Equal(t, "short", maskAuthTokenHash("short"))
 	assert.Equal(t, "", maskAuthTokenHash(""))
+}
+
+func TestAuthEmailSelfServiceRegistration(t *testing.T) {
+	saveAuthConfig()
+	prevAdmin := config.AuthAdminUsername
+	config.AuthAdminUsername = ""
+	defer func() { config.AuthAdminUsername = prevAdmin }()
+
+	svc := NewAuthService(newAuthRepoStub())
+
+	// Registration with email + password only (no username). A previous
+	// account exists so the first-user admin bootstrap does not fire.
+	_, err := svc.Register(context.Background(), domainAuth.RegisterRequest{Username: "first", Password: "secret123"})
+	require.NoError(t, err)
+
+	info, err := svc.Register(context.Background(), domainAuth.RegisterRequest{Email: "jane.doe@example.com", Password: "secret123"})
+	require.NoError(t, err)
+	assert.Equal(t, "jane.doe", info.Username, "username must be derived from the email local part")
+	assert.Equal(t, "jane.doe@example.com", info.Email)
+
+	// Duplicate email is rejected regardless of username.
+	_, err = svc.Register(context.Background(), domainAuth.RegisterRequest{Email: "JANE.DOE@example.com", Password: "secret123"})
+	require.ErrorIs(t, err, pkgError.ErrEmailAlreadyExists)
+
+	// Login works with the email as the identifier.
+	resp, err := svc.Login(context.Background(), domainAuth.LoginRequest{Username: "jane.doe@example.com", Password: "secret123"})
+	require.NoError(t, err)
+	assert.Equal(t, "jane.doe", resp.User.Username)
+	assert.Equal(t, "jane.doe@example.com", resp.User.Email)
+
+	// Login also works with the derived username.
+	resp, err = svc.Login(context.Background(), domainAuth.LoginRequest{Username: "jane.doe", Password: "secret123"})
+	require.NoError(t, err)
+	assert.Equal(t, "jane.doe", resp.User.Username)
+
+	// Dashboard-style Basic auth accepts the email too.
+	user, err := svc.AuthenticateBasic(context.Background(), "jane.doe@example.com", "secret123")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, "jane.doe", user.Username)
+}
+
+func TestAuthEmailUsernameCollision(t *testing.T) {
+	saveAuthConfig()
+	svc := NewAuthService(newAuthRepoStub())
+
+	// Someone already owns the derived username "john.doe".
+	_, err := svc.Register(context.Background(), domainAuth.RegisterRequest{Username: "john.doe", Password: "secret123"})
+	require.NoError(t, err)
+
+	// Email registration derives a free username with a numeric suffix.
+	info, err := svc.Register(context.Background(), domainAuth.RegisterRequest{Email: "john.doe@example.com", Password: "secret123"})
+	require.NoError(t, err)
+	assert.Equal(t, "john.doe2", info.Username)
+	assert.Equal(t, "john.doe@example.com", info.Email)
+
+	// Both accounts are distinct and log in via their own identifiers.
+	_, err = svc.Login(context.Background(), domainAuth.LoginRequest{Username: "john.doe", Password: "secret123"})
+	require.NoError(t, err)
+	_, err = svc.Login(context.Background(), domainAuth.LoginRequest{Username: "john.doe@example.com", Password: "secret123"})
+	require.NoError(t, err)
+}
+
+func TestAuthEmailInvalid(t *testing.T) {
+	saveAuthConfig()
+	svc := NewAuthService(newAuthRepoStub())
+
+	_, err := svc.Register(context.Background(), domainAuth.RegisterRequest{Email: "not-an-email", Password: "secret123"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validate register request")
+
+	// Email-only registration requires a valid email, not an empty one.
+	_, err = svc.Register(context.Background(), domainAuth.RegisterRequest{Email: "", Password: "secret123"})
+	require.Error(t, err)
 }
 
 func TestAuthAdminBootstrapFirstUser(t *testing.T) {
