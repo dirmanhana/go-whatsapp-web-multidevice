@@ -280,6 +280,10 @@ func registerUIRoute(apiGroup fiber.Router, ctx context.Context) {
 			c.Type("html")
 			return c.Send(uiasset.FallbackHTML(config.AppVersion, config.AppUIRepo))
 		}
+		if config.AuthEnabled {
+			content = uiasset.ApplyAuthUIPatch(content)
+			etag = uiasset.ContentSHA(content)
+		}
 		quoted := `"` + etag + `"`
 		c.Set(fiber.HeaderCacheControl, "no-cache")
 		c.Set(fiber.HeaderETag, quoted)

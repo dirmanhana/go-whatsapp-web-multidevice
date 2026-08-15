@@ -13,7 +13,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func contentSHA(data []byte) string {
+// ContentSHA returns the hex sha256 of the given dashboard bytes. It is used
+// for the disk-cache digest and as the HTTP ETag (which must reflect the exact
+// bytes served, including any serve-time auth patch).
+func ContentSHA(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -40,7 +43,7 @@ func (m *Manager) LoadCache() error {
 		return err
 	}
 
-	asset := cachedAsset{html: html, sha256: contentSHA(html)}
+	asset := cachedAsset{html: html, sha256: ContentSHA(html)}
 	if metaRaw, metaErr := os.ReadFile(filepath.Join(m.cfg.CacheDir, metaFileName)); metaErr == nil {
 		var meta cacheMeta
 		if json.Unmarshal(metaRaw, &meta) == nil && meta.AssetName == m.cfg.AssetName {
