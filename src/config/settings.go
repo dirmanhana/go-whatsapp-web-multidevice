@@ -41,6 +41,11 @@ var (
 	AuthAllowRegister = true
 	AuthTokenTTL      = 24 * time.Hour
 	AuthDeviceLimit   = 3
+	// AuthAdminUsername designates the admin account. When empty, the first
+	// registered user becomes the admin (fresh-deploy bootstrap). When set,
+	// the matching user is granted admin on registration and re-verified on
+	// login, so an existing deployment can promote an operator account.
+	AuthAdminUsername = ""
 	// AuthRateLimitMax caps failed login/register attempts per IP within
 	// AuthRateLimitWindow before the endpoint returns 429. 0 disables the
 	// limiter (not recommended).

@@ -146,6 +146,9 @@ func initEnvConfig() {
 			config.AuthRateLimitWindow = window
 		}
 	}
+	if envAdmin := viper.GetString("auth_admin_username"); envAdmin != "" {
+		config.AuthAdminUsername = envAdmin
+	}
 	if viper.GetString("app_ui_auto_update") != "" {
 		config.AppUIAutoUpdate = viper.GetBool("app_ui_auto_update")
 	}
@@ -415,6 +418,12 @@ func initFlags() {
 		"auth-rate-limit-window", "",
 		config.AuthRateLimitWindow,
 		`rate limit window for failed login/register attempts --auth-rate-limit-window <duration> | example: --auth-rate-limit-window=15m`,
+	)
+	rootCmd.PersistentFlags().StringVarP(
+		&config.AuthAdminUsername,
+		"auth-admin-username", "",
+		config.AuthAdminUsername,
+		`operator-designated admin account; empty promotes the first registered user --auth-admin-username <username> | example: --auth-admin-username=admin`,
 	)
 
 	// Web UI flags

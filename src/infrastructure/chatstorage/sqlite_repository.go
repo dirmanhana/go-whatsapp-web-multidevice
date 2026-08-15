@@ -1606,7 +1606,7 @@ func (r *SQLiteRepository) GetUserByUsername(username string) (*domainChatStorag
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT id, username, password_hash, created_at, updated_at
+		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
 		FROM users
 		WHERE LOWER(username) = LOWER(?)
 		LIMIT 1
@@ -1619,7 +1619,7 @@ func (r *SQLiteRepository) GetUserByID(id int64) (*domainChatStorage.User, error
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT id, username, password_hash, created_at, updated_at
+		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
 		FROM users
 		WHERE id = ?
 		LIMIT 1
@@ -1632,7 +1632,7 @@ func (r *SQLiteRepository) GetUserByTokenHash(tokenHash string) (*domainChatStor
 		return nil, nil
 	}
 	return r.scanUser(`
-		SELECT u.id, u.username, u.password_hash, u.created_at, u.updated_at
+		SELECT u.id, u.username, u.password_hash, u.is_admin, u.disabled, u.created_at, u.updated_at
 		FROM auth_tokens t
 		JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND t.expires_at > ?
@@ -1642,7 +1642,7 @@ func (r *SQLiteRepository) GetUserByTokenHash(tokenHash string) (*domainChatStor
 
 func (r *SQLiteRepository) scanUser(query string, args ...any) (*domainChatStorage.User, error) {
 	user := &domainChatStorage.User{}
-	err := r.db.QueryRow(query, args...).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
+	err := r.db.QueryRow(query, args...).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1743,6 +1743,55 @@ func (r *SQLiteRepository) SetDeviceOwner(deviceID string, ownerUserID int64) (b
 	}
 	affected, err := result.RowsAffected()
 	return affected > 0, err
+}
+
+// CountUsers reports how many accounts exist.
+func (r *SQLiteRepository) CountUsers() (int, error) {
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	return count, err
+}
+
+// SetUserAdmin grants or revokes the admin flag of a user.
+func (r *SQLiteRepository) SetUserAdmin(userID int64, isAdmin bool) error {
+	if userID == 0 {
+		return fmt.Errorf("user id is required")
+	}
+	_, err := r.db.Exec("UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?", isAdmin, time.Now(), userID)
+	return err
+}
+
+// SetUserDisabled enables or disables an account. Disabled accounts can no
+// longer log in and their tokens stop authenticating.
+func (r *SQLiteRepository) SetUserDisabled(userID int64, disabled bool) error {
+	if userID == 0 {
+		return fmt.Errorf("user id is required")
+	}
+	_, err := r.db.Exec("UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?", disabled, time.Now(), userID)
+	return err
+}
+
+// ListUsers returns all accounts, ordered by id.
+func (r *SQLiteRepository) ListUsers() ([]domainChatStorage.User, error) {
+	rows, err := r.db.Query(`
+		SELECT id, username, password_hash, is_admin, disabled, created_at, updated_at
+		FROM users
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := []domainChatStorage.User{}
+	for rows.Next() {
+		var user domainChatStorage.User
+		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.IsAdmin, &user.Disabled, &user.CreatedAt, &user.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
 }
 
 // GetChatNameWithPushName determines the appropriate name for a chat with pushname support
@@ -2751,5 +2800,9 @@ func (r *SQLiteRepository) getMigrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices(owner_user_id)`,
 		// Migration 48: List/revoke a user's auth sessions without a full-table scan
 		`CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id, created_at)`,
+		// Migration 49: Admin flag for bootstrap and user management
+		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
+		// Migration 50: Account disable toggle (banned users keep their row)
+		`ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`,
 	}
 }

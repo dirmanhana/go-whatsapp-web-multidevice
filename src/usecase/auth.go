@@ -52,12 +52,25 @@ func (s *serviceAuth) Register(ctx context.Context, request domainAuth.RegisterR
 		return info, fmt.Errorf("failed to hash password: %w", err)
 	}
 
+	// Admin bootstrap: either the first account ever (fresh deployment) or
+	// the account matching the operator-designated AUTH_ADMIN_USERNAME.
+	userCount, err := s.storage.CountUsers()
+	if err != nil {
+		return info, err
+	}
+	isAdmin := userCount == 0 || matchesAdminUsername(username)
+
 	id, err := s.storage.CreateUser(username, string(passwordHash))
 	if err != nil {
 		return info, err
 	}
+	if isAdmin {
+		if err := s.storage.SetUserAdmin(id, true); err != nil {
+			return info, err
+		}
+	}
 
-	return domainAuth.UserInfo{ID: id, Username: username, DeviceCount: 0}, nil
+	return domainAuth.UserInfo{ID: id, Username: username, DeviceCount: 0, IsAdmin: isAdmin}, nil
 }
 
 func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest) (domainAuth.LoginResponse, error) {
@@ -76,8 +89,20 @@ func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest
 	if user == nil {
 		return response, pkgError.ErrInvalidCredentials
 	}
+	if user.Disabled {
+		return response, pkgError.ErrUserDisabled
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(request.Password)); err != nil {
 		return response, pkgError.ErrInvalidCredentials
+	}
+
+	// Re-verify the operator-designated admin on every login so an existing
+	// deployment can promote an account without re-registering.
+	if matchesAdminUsername(user.Username) && !user.IsAdmin {
+		if err := s.storage.SetUserAdmin(user.ID, true); err != nil {
+			return response, err
+		}
+		user.IsAdmin = true
 	}
 
 	// Opportunistic cleanup of stale tokens before issuing a new one.
@@ -97,6 +122,7 @@ func (s *serviceAuth) Login(ctx context.Context, request domainAuth.LoginRequest
 			ID:          user.ID,
 			Username:    user.Username,
 			DeviceCount: deviceCount,
+			IsAdmin:     user.IsAdmin,
 		},
 	}
 	return response, nil
@@ -168,7 +194,7 @@ func (s *serviceAuth) Authenticate(_ context.Context, token string) (*domainChat
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
+	if user == nil || user.Disabled {
 		return nil, pkgError.ErrUnauthorized
 	}
 	return user, nil
@@ -193,6 +219,9 @@ func (s *serviceAuth) AuthenticateBasic(_ context.Context, username, password st
 	if user == nil {
 		return nil, pkgError.ErrUnauthorized
 	}
+	if user.Disabled {
+		return nil, pkgError.ErrUserDisabled
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, pkgError.ErrUnauthorized
 	}
@@ -216,7 +245,81 @@ func (s *serviceAuth) Me(ctx context.Context) (domainAuth.UserInfo, error) {
 		ID:          user.ID,
 		Username:    user.Username,
 		DeviceCount: deviceCount,
+		IsAdmin:     user.IsAdmin,
 	}, nil
+}
+
+// ListUsers returns every account for an admin caller.
+func (s *serviceAuth) ListUsers(ctx context.Context) ([]domainAuth.AdminUserInfo, error) {
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if s.storage == nil {
+		return nil, fmt.Errorf("chat storage not initialized")
+	}
+
+	users, err := s.storage.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]domainAuth.AdminUserInfo, 0, len(users))
+	for _, user := range users {
+		deviceCount, _ := s.storage.CountUserDevices(user.ID)
+		result = append(result, domainAuth.AdminUserInfo{
+			ID:          user.ID,
+			Username:    user.Username,
+			IsAdmin:     user.IsAdmin,
+			Disabled:    user.Disabled,
+			DeviceCount: deviceCount,
+			CreatedAt:   user.CreatedAt,
+		})
+	}
+	return result, nil
+}
+
+// SetUserDisabled bans or unbans an account for an admin caller. Disabling
+// also revokes every session of the target user; an admin can never disable
+// their own account.
+func (s *serviceAuth) SetUserDisabled(ctx context.Context, userID int64, disabled bool) error {
+	caller, err := s.requireAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	if s.storage == nil {
+		return fmt.Errorf("chat storage not initialized")
+	}
+	if caller.ID == userID {
+		return pkgError.ErrCannotDisableSelf
+	}
+
+	if err := s.storage.SetUserDisabled(userID, disabled); err != nil {
+		return err
+	}
+	if disabled {
+		// Sessions must die with the ban; re-enabling starts from a clean slate.
+		return s.storage.DeleteUserAuthTokens(userID)
+	}
+	return nil
+}
+
+// requireAdmin resolves the caller from the request context and enforces the
+// admin flag.
+func (s *serviceAuth) requireAdmin(ctx context.Context) (*domainChatStorage.User, error) {
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return nil, pkgError.ErrUnauthorized
+	}
+	if !user.IsAdmin {
+		return nil, pkgError.ErrForbidden
+	}
+	return user, nil
+}
+
+// matchesAdminUsername reports whether the username equals the operator-
+// designated AUTH_ADMIN_USERNAME (case-insensitive). An empty designation
+// never matches, so bootstrap falls back to the first registered user.
+func matchesAdminUsername(username string) bool {
+	return config.AuthAdminUsername != "" && strings.EqualFold(strings.TrimSpace(username), strings.TrimSpace(config.AuthAdminUsername))
 }
 
 // generateAuthToken returns a 64-char hex token (32 random bytes). Only the

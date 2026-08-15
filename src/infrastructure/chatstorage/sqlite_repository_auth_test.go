@@ -156,6 +156,82 @@ func TestListAndDeleteUserAuthTokens(t *testing.T) {
 	}
 }
 
+func TestAdminAndUserManagement(t *testing.T) {
+	repo := newTestSQLiteRepository(t)
+
+	// Fresh DB: zero users.
+	count, err := repo.CountUsers()
+	if err != nil || count != 0 {
+		t.Fatalf("expected 0 users, got %d (err=%v)", count, err)
+	}
+
+	aliceID, err := repo.CreateUser("alice", "hash")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	if _, err := repo.CreateUser("bob", "hash"); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	// Grant admin and verify the flag round-trips through every lookup.
+	if err := repo.SetUserAdmin(aliceID, true); err != nil {
+		t.Fatalf("set admin: %v", err)
+	}
+	alice, err := repo.GetUserByID(aliceID)
+	if err != nil || alice == nil || !alice.IsAdmin {
+		t.Fatalf("expected alice to be admin: user=%+v err=%v", alice, err)
+	}
+	if user, _ := repo.GetUserByUsername("alice"); user == nil || !user.IsAdmin {
+		t.Fatal("admin flag must survive username lookup")
+	}
+
+	// Disable bob; the flag is visible via lookups.
+	users, err := repo.ListUsers()
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	var bobID int64
+	for _, user := range users {
+		if user.Username == "bob" {
+			bobID = user.ID
+		}
+	}
+	if bobID == 0 {
+		t.Fatal("bob not found in list")
+	}
+	if err := repo.SetUserDisabled(bobID, true); err != nil {
+		t.Fatalf("disable bob: %v", err)
+	}
+	bob, err := repo.GetUserByID(bobID)
+	if err != nil || bob == nil || !bob.Disabled {
+		t.Fatalf("expected bob disabled: user=%+v err=%v", bob, err)
+	}
+
+	// ListUsers reports both flags.
+	users, err = repo.ListUsers()
+	if err != nil || len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d (err=%v)", len(users), err)
+	}
+	byName := map[string]domainChatStorage.User{}
+	for _, user := range users {
+		byName[user.Username] = user
+	}
+	if !byName["alice"].IsAdmin || byName["alice"].Disabled {
+		t.Fatalf("unexpected alice flags: %+v", byName["alice"])
+	}
+	if byName["bob"].IsAdmin || !byName["bob"].Disabled {
+		t.Fatalf("unexpected bob flags: %+v", byName["bob"])
+	}
+
+	// Re-enabling clears the flag.
+	if err := repo.SetUserDisabled(bobID, false); err != nil {
+		t.Fatalf("enable bob: %v", err)
+	}
+	if bob, _ := repo.GetUserByID(bobID); bob == nil || bob.Disabled {
+		t.Fatal("bob must be enabled again")
+	}
+}
+
 func TestDeviceOwnerClaim(t *testing.T) {
 	repo := newTestSQLiteRepository(t)
 

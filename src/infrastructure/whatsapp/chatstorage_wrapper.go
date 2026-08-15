@@ -386,3 +386,19 @@ func (r *deviceChatStorage) CountUserDevices(userID int64) (int, error) {
 func (r *deviceChatStorage) SetDeviceOwner(deviceID string, ownerUserID int64) (bool, error) {
 	return r.base.SetDeviceOwner(deviceID, ownerUserID)
 }
+
+func (r *deviceChatStorage) CountUsers() (int, error) {
+	return r.base.CountUsers()
+}
+
+func (r *deviceChatStorage) SetUserAdmin(userID int64, isAdmin bool) error {
+	return r.base.SetUserAdmin(userID, isAdmin)
+}
+
+func (r *deviceChatStorage) SetUserDisabled(userID int64, disabled bool) error {
+	return r.base.SetUserDisabled(userID, disabled)
+}
+
+func (r *deviceChatStorage) ListUsers() ([]domainChatStorage.User, error) {
+	return r.base.ListUsers()
+}

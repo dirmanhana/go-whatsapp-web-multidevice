@@ -132,6 +132,16 @@ type IChatStorageRepository interface {
 	// slots that are unowned or already owned by the same user, reporting
 	// whether the claim took effect.
 	SetDeviceOwner(deviceID string, ownerUserID int64) (bool, error)
+	// CountUsers reports how many accounts exist (admin bootstrap uses it to
+	// detect the first user).
+	CountUsers() (int, error)
+	// SetUserAdmin grants or revokes the admin flag of a user.
+	SetUserAdmin(userID int64, isAdmin bool) error
+	// SetUserDisabled enables or disables an account. Disabled accounts can
+	// no longer log in and their tokens stop authenticating.
+	SetUserDisabled(userID int64, disabled bool) error
+	// ListUsers returns all accounts, ordered by id.
+	ListUsers() ([]User, error)
 
 	// Schema operations
 	InitializeSchema() error

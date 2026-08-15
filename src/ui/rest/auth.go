@@ -1,6 +1,9 @@
 package rest
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
 	domainAuth "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/auth"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/utils"
@@ -23,6 +26,9 @@ func InitRestAuth(app fiber.Router, service domainAuth.IAuthUsecase) Auth {
 	app.Post("/auth/logout-all", rest.LogoutAll)
 	app.Get("/auth/me", rest.Me)
 	app.Get("/auth/sessions", rest.Sessions)
+	app.Get("/auth/users", rest.ListUsers)
+	app.Post("/auth/users/:id/disable", rest.DisableUser)
+	app.Post("/auth/users/:id/enable", rest.EnableUser)
 
 	return rest
 }
@@ -123,6 +129,62 @@ func (handler *Auth) Sessions(c fiber.Ctx) error {
 		Code:    "SUCCESS",
 		Message: "Active sessions",
 		Results: sessions,
+	})
+}
+
+func (handler *Auth) ListUsers(c fiber.Ctx) error {
+	users, err := handler.Service.ListUsers(c.Context())
+	utils.PanicIfNeeded(err)
+
+	return c.JSON(utils.ResponseData{
+		Status:  200,
+		Code:    "SUCCESS",
+		Message: "Users",
+		Results: users,
+	})
+}
+
+func (handler *Auth) DisableUser(c fiber.Ctx) error {
+	userID, err := strconv.ParseInt(strings.TrimSpace(c.Params("id")), 10, 64)
+	if err != nil || userID <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(utils.ResponseData{
+			Status:  fiber.StatusBadRequest,
+			Code:    "BAD_REQUEST",
+			Message: "Invalid user id",
+			Results: nil,
+		})
+	}
+	if err := handler.Service.SetUserDisabled(c.Context(), userID, true); err != nil {
+		utils.PanicIfNeeded(err)
+	}
+
+	return c.JSON(utils.ResponseData{
+		Status:  200,
+		Code:    "SUCCESS",
+		Message: "User disabled",
+		Results: nil,
+	})
+}
+
+func (handler *Auth) EnableUser(c fiber.Ctx) error {
+	userID, err := strconv.ParseInt(strings.TrimSpace(c.Params("id")), 10, 64)
+	if err != nil || userID <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(utils.ResponseData{
+			Status:  fiber.StatusBadRequest,
+			Code:    "BAD_REQUEST",
+			Message: "Invalid user id",
+			Results: nil,
+		})
+	}
+	if err := handler.Service.SetUserDisabled(c.Context(), userID, false); err != nil {
+		utils.PanicIfNeeded(err)
+	}
+
+	return c.JSON(utils.ResponseData{
+		Status:  200,
+		Code:    "SUCCESS",
+		Message: "User enabled",
+		Results: nil,
 	})
 }
 

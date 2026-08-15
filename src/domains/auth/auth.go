@@ -21,6 +21,18 @@ type UserInfo struct {
 	ID          int64  `json:"id"`
 	Username    string `json:"username"`
 	DeviceCount int    `json:"device_count"`
+	IsAdmin     bool   `json:"is_admin"`
+}
+
+// AdminUserInfo is the admin's view of one account: identity, flags, device
+// count, and registration time.
+type AdminUserInfo struct {
+	ID          int64     `json:"id"`
+	Username    string    `json:"username"`
+	IsAdmin     bool      `json:"is_admin"`
+	Disabled    bool      `json:"disabled"`
+	DeviceCount int       `json:"device_count"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type LoginResponse struct {
@@ -59,4 +71,9 @@ type IAuthUsecase interface {
 	// Me returns the authenticated user from the request context with its
 	// current device count.
 	Me(ctx context.Context) (UserInfo, error)
+	// ListUsers returns all accounts; admin only.
+	ListUsers(ctx context.Context) ([]AdminUserInfo, error)
+	// SetUserDisabled enables or disables an account (ban); admin only.
+	// Disabling revokes the user's sessions.
+	SetUserDisabled(ctx context.Context, userID int64, disabled bool) error
 }
