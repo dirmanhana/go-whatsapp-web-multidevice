@@ -1808,6 +1808,39 @@ func (r *SQLiteRepository) ListUsers() ([]domainChatStorage.User, error) {
 	return users, rows.Err()
 }
 
+// UpdateUser rewrites the editable identity fields of an account.
+func (r *SQLiteRepository) UpdateUser(userID int64, username, email string) error {
+	if userID == 0 || strings.TrimSpace(username) == "" {
+		return fmt.Errorf("user id and username are required")
+	}
+	_, err := r.db.Exec(`
+		UPDATE users SET username = ?, email = ?, updated_at = ? WHERE id = ?
+	`, strings.TrimSpace(username), strings.TrimSpace(email), time.Now(), userID)
+	return err
+}
+
+// SetUserPassword replaces the password hash of an account.
+func (r *SQLiteRepository) SetUserPassword(userID int64, passwordHash string) error {
+	if userID == 0 || strings.TrimSpace(passwordHash) == "" {
+		return fmt.Errorf("user id and password hash are required")
+	}
+	_, err := r.db.Exec(
+		"UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+		passwordHash, time.Now(), userID,
+	)
+	return err
+}
+
+// DeleteUser removes an account row. Its auth tokens must already be revoked
+// by the caller: auth_tokens has no ON DELETE CASCADE.
+func (r *SQLiteRepository) DeleteUser(userID int64) error {
+	if userID == 0 {
+		return fmt.Errorf("user id is required")
+	}
+	_, err := r.db.Exec("DELETE FROM users WHERE id = ?", userID)
+	return err
+}
+
 // GetChatNameWithPushName determines the appropriate name for a chat with pushname support
 func (r *SQLiteRepository) GetChatNameWithPushName(jid types.JID, chatJID string, senderUser string, pushName string) string {
 	// First, check if chat already exists with a name

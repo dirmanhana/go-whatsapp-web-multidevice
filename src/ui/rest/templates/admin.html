@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User management — GOWA</title>
+<style>__INLINE_CSS__</style>
+</head>
+<body>
+<header class="topbar">
+	<div class="brand">User management</div>
+	<nav>
+		<a href="{{BASE_PATH}}/">Dashboard</a>
+		<a href="{{BASE_PATH}}/account">Account</a>
+	</nav>
+</header>
+
+<main class="wrap">
+	<section id="guard" class="card hidden">
+		<h2 id="guard-title">Admin access required</h2>
+		<p id="guard-text" class="muted"></p>
+		<p style="margin-bottom:0"><a href="{{BASE_PATH}}/">Back to dashboard</a></p>
+	</section>
+
+	<section id="panel" class="hidden">
+		<div class="row between" style="margin-bottom:14px">
+			<div>
+				<h1>Users</h1>
+				<p class="muted small" style="margin:4px 0 0">Create, edit, reset passwords, disable and delete accounts.</p>
+			</div>
+			<button id="btn-add" class="btn primary" type="button">+ Add user</button>
+		</div>
+
+		<div id="page-error" class="error hidden"></div>
+
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr>
+						<th>ID</th>
+						<th>Username</th>
+						<th>Email</th>
+						<th>Role</th>
+						<th>Status</th>
+						<th>Devices</th>
+						<th>Created</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody id="rows"></tbody>
+			</table>
+		</div>
+		<p id="empty" class="muted hidden" style="margin-top:12px">No accounts yet.</p>
+	</section>
+</main>
+
+<!-- Add / edit account -->
+<div id="modal-user" class="modal hidden" role="dialog" aria-modal="true">
+	<div class="box">
+		<h3 id="user-title">Add user</h3>
+		<p class="sub">At least one of username or email is required; a username can be derived from the email.</p>
+		<form id="form-user">
+			<label for="f-username">Username</label>
+			<input id="f-username" type="text" maxlength="32" autocomplete="off" placeholder="e.g. budi.santoso">
+			<label for="f-email">Email</label>
+			<input id="f-email" type="email" maxlength="255" autocomplete="off" placeholder="user@example.com">
+			<div id="field-password">
+				<label for="f-password">Password</label>
+				<input id="f-password" type="password" minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters">
+			</div>
+			<div class="check">
+				<input id="f-admin" type="checkbox">
+				<label for="f-admin" style="margin:0">Admin — can manage users</label>
+			</div>
+			<div id="user-error" class="error hidden"></div>
+			<div class="actions">
+				<button type="button" class="btn" data-close="modal-user">Cancel</button>
+				<button type="submit" class="btn primary" id="user-submit">Save</button>
+			</div>
+		</form>
+	</div>
+</div>
+
+<!-- Reset password -->
+<div id="modal-password" class="modal hidden" role="dialog" aria-modal="true">
+	<div class="box">
+		<h3>Reset password</h3>
+		<p class="sub" id="password-sub"></p>
+		<form id="form-password">
+			<label for="f-reset">New password</label>
+			<input id="f-reset" type="password" required minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters">
+			<div id="password-error" class="error hidden"></div>
+			<div class="actions">
+				<button type="button" class="btn" data-close="modal-password">Cancel</button>
+				<button type="submit" class="btn primary">Update</button>
+			</div>
+		</form>
+	</div>
+</div>
+
+<!-- Delete confirmation -->
+<div id="modal-delete" class="modal hidden" role="dialog" aria-modal="true">
+	<div class="box">
+		<h3>Delete account?</h3>
+		<p class="sub" id="delete-sub"></p>
+		<div id="delete-error" class="error hidden"></div>
+		<div class="actions">
+			<button type="button" class="btn" data-close="modal-delete">Cancel</button>
+			<button type="button" class="btn danger" id="delete-confirm">Delete</button>
+		</div>
+	</div>
+</div>
+
+<script>__INLINE_JS__</script>
+<script>
+(function () {
+	var G = window.GOWA;
+	var $ = function (id) { return document.getElementById(id); };
+	var me = null;
+	var users = [];
+	var editing = null;
+	var passwordTarget = null;
+	var deleteTarget = null;
+
+	function guard(title, text) {
+		$('guard-title').textContent = title;
+		$('guard-text').textContent = text || '';
+		$('guard').classList.remove('hidden');
+		$('panel').classList.add('hidden');
+	}
+
+	function openModal(id) { $(id).classList.remove('hidden'); }
+	function closeModal(id) { $(id).classList.add('hidden'); }
+
+	document.addEventListener('click', function (ev) {
+		var el = ev.target;
+		if (el.hasAttribute && el.hasAttribute('data-close')) {
+			closeModal(el.getAttribute('data-close'));
+			return;
+		}
+		if (el.classList && el.classList.contains('modal')) el.classList.add('hidden');
+	});
+	document.addEventListener('keydown', function (ev) {
+		if (ev.key !== 'Escape') return;
+		['modal-user', 'modal-password', 'modal-delete'].forEach(closeModal);
+	});
+
+	function fmtDate(value) {
+		if (!value) return '';
+		var d = new Date(value);
+		return isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+	}
+
+	function actionButton(label, className, handler) {
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'btn small ' + (className || '');
+		b.textContent = label;
+		b.addEventListener('click', handler);
+		return b;
+	}
+
+	function render() {
+		var body = $('rows');
+		body.innerHTML = '';
+		$('empty').classList.toggle('hidden', users.length > 0);
+
+		users.forEach(function (u) {
+			var tr = document.createElement('tr');
+			var own = me && u.id === me.id;
+			tr.innerHTML =
+				'<td>' + u.id + (own ? ' <span class="badge">you</span>' : '') + '</td>' +
+				'<td>' + G.esc(u.username) + '</td>' +
+				'<td>' + (u.email ? G.esc(u.email) : '<span class="muted">—</span>') + '</td>' +
+				'<td>' + (u.is_admin ? '<span class="badge admin">admin</span>' : '<span class="badge">user</span>') + '</td>' +
+				'<td>' + (u.disabled ? '<span class="badge off">disabled</span>' : '<span class="badge on">active</span>') + '</td>' +
+				'<td>' + (u.device_count || 0) + '</td>' +
+				'<td class="small muted">' + G.esc(fmtDate(u.created_at)) + '</td>';
+
+			var actions = document.createElement('td');
+			actions.className = 'actions';
+			actions.appendChild(actionButton('Edit', '', function () { openEdit(u); }));
+			actions.appendChild(actionButton('Password', '', function () { openPassword(u); }));
+			// An admin cannot disable or delete their own account (the server
+			// rejects it too) — hiding the buttons keeps the UI honest.
+			if (!own) {
+				actions.appendChild(actionButton(u.disabled ? 'Enable' : 'Disable', '', function () { toggleDisabled(u); }));
+				actions.appendChild(actionButton('Delete', 'danger', function () { openDelete(u); }));
+			}
+			tr.appendChild(actions);
+			body.appendChild(tr);
+		});
+	}
+
+	async function load() {
+		G.showMessage($('page-error'), '');
+		try {
+			users = (await G.api('/auth/users')) || [];
+			render();
+		} catch (e) {
+			G.showMessage($('page-error'), e.message);
+		}
+	}
+
+	function openAdd() {
+		editing = null;
+		$('user-title').textContent = 'Add user';
+		$('f-username').value = '';
+		$('f-email').value = '';
+		$('f-password').value = '';
+		$('f-admin').checked = false;
+		$('field-password').classList.remove('hidden');
+		G.showMessage($('user-error'), '');
+		openModal('modal-user');
+		$('f-username').focus();
+	}
+
+	function openEdit(u) {
+		editing = u;
+		$('user-title').textContent = 'Edit ' + u.username;
+		$('f-username').value = u.username || '';
+		$('f-email').value = u.email || '';
+		$('f-admin').checked = !!u.is_admin;
+		// Passwords are never readable, so editing never touches one: use the
+		// dedicated reset modal instead.
+		$('field-password').classList.add('hidden');
+		G.showMessage($('user-error'), '');
+		openModal('modal-user');
+		$('f-username').focus();
+	}
+
+	function openPassword(u) {
+		passwordTarget = u;
+		$('password-sub').textContent = 'Set a new password for ' + u.username +
+			(u.email ? ' (' + u.email + ')' : '') + '. Their sessions are signed out.';
+		$('f-reset').value = '';
+		G.showMessage($('password-error'), '');
+		openModal('modal-password');
+		$('f-reset').focus();
+	}
+
+	function openDelete(u) {
+		deleteTarget = u;
+		$('delete-sub').textContent = 'Remove ' + u.username +
+			(u.email ? ' (' + u.email + ')' : '') + ' permanently. Devices linked to this account must be removed first.';
+		G.showMessage($('delete-error'), '');
+		openModal('modal-delete');
+	}
+
+	async function toggleDisabled(u) {
+		G.showMessage($('page-error'), '');
+		try {
+			await G.api('/auth/users/' + u.id + (u.disabled ? '/enable' : '/disable'), { method: 'POST' });
+			await load();
+		} catch (e) {
+			G.showMessage($('page-error'), e.message);
+		}
+	}
+
+	$('btn-add').addEventListener('click', openAdd);
+
+	$('form-user').addEventListener('submit', async function (ev) {
+		ev.preventDefault();
+		var errBox = $('user-error');
+		G.showMessage(errBox, '');
+		var submit = $('user-submit');
+		var username = $('f-username').value.trim();
+		var email = $('f-email').value.trim();
+		var isAdmin = $('f-admin').checked;
+
+		var payload;
+		if (editing) {
+			payload = { username: username, is_admin: isAdmin };
+			if (email) payload.email = email; // an empty email means "unchanged"
+		} else {
+			payload = { username: username, email: email, password: $('f-password').value, is_admin: isAdmin };
+		}
+
+		submit.disabled = true;
+		try {
+			if (editing) {
+				await G.api('/auth/users/' + editing.id, { method: 'PUT', body: JSON.stringify(payload) });
+			} else {
+				await G.api('/auth/users', { method: 'POST', body: JSON.stringify(payload) });
+			}
+			closeModal('modal-user');
+			await load();
+		} catch (e) {
+			G.showMessage(errBox, e.message);
+		} finally {
+			submit.disabled = false;
+		}
+	});
+
+	$('form-password').addEventListener('submit', async function (ev) {
+		ev.preventDefault();
+		if (!passwordTarget) return;
+		var errBox = $('password-error');
+		G.showMessage(errBox, '');
+		var submit = ev.target.querySelector('button[type=submit]');
+		submit.disabled = true;
+		try {
+			await G.api('/auth/users/' + passwordTarget.id + '/password', {
+				method: 'POST',
+				body: JSON.stringify({ password: $('f-reset').value })
+			});
+			closeModal('modal-password');
+			G.showMessage($('page-error'), 'Password updated for ' + passwordTarget.username + '.', 'ok');
+		} catch (e) {
+			G.showMessage(errBox, e.message);
+		} finally {
+			submit.disabled = false;
+		}
+	});
+
+	$('delete-confirm').addEventListener('click', async function () {
+		if (!deleteTarget) return;
+		var errBox = $('delete-error');
+		G.showMessage(errBox, '');
+		var btn = $('delete-confirm');
+		btn.disabled = true;
+		try {
+			await G.api('/auth/users/' + deleteTarget.id, { method: 'DELETE' });
+			closeModal('modal-delete');
+			await load();
+		} catch (e) {
+			G.showMessage(errBox, e.message);
+		} finally {
+			btn.disabled = false;
+		}
+	});
+
+	(async function boot() {
+		try {
+			me = await G.api('/auth/me');
+		} catch (e) {
+			guard(e.code === 'NOT_SIGNED_IN' ? 'Sign in required' : 'Session expired', e.message);
+			return;
+		}
+		if (!me.is_admin) {
+			guard('Admin access required', 'The account "' + me.username + '" is not an administrator.');
+			return;
+		}
+		$('panel').classList.remove('hidden');
+		await load();
+	})();
+})();
+</script>
+</body>
+</html>

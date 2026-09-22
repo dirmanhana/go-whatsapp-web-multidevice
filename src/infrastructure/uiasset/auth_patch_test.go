@@ -91,3 +91,18 @@ func TestApplyAuthUIPatch_LeavesUnknownBundleAlone(t *testing.T) {
 	assert.Equal(t, strings.ReplaceAll(patched, authUIInjection, "</body>"), string(content),
 		"reverting the injection must reproduce the original content exactly")
 }
+// TestApplyAuthUIPatch_InjectsSettingsEntryPoints guards the navigation the
+// patch adds for the pages this server hosts itself: every signed-in user gets
+// /account, and admins additionally get /admin (visibility driven by
+// GET /auth/me, never by the client alone).
+func TestApplyAuthUIPatch_InjectsSettingsEntryPoints(t *testing.T) {
+	content := dashboardFixture(t)
+
+	patched := string(ApplyAuthUIPatch(content))
+
+	assert.Contains(t, patched, "gowa-account-btn", "account entry point must be injected")
+	assert.Contains(t, patched, "gowa-admin-btn", "admin entry point must be injected")
+	assert.Contains(t, patched, "ORIGIN+'/account'", "account button must open /account")
+	assert.Contains(t, patched, "ORIGIN+'/admin'", "admin button must open /admin")
+	assert.Contains(t, patched, "fetch(ORIGIN+'/auth/me'", "admin visibility must come from the server's is_admin flag")
+}

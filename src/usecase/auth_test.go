@@ -183,6 +183,46 @@ func (s *authRepoStub) ListUsers() ([]domainChatStorage.User, error) {
 	return users, nil
 }
 
+// UpdateUser re-keys the username-indexed map, mirroring how a real UPDATE
+// changes the lookup identity.
+func (s *authRepoStub) UpdateUser(userID int64, username, email string) error {
+	var target *domainChatStorage.User
+	for key, u := range s.users {
+		if u.ID == userID {
+			target = u
+			delete(s.users, key)
+			break
+		}
+	}
+	if target == nil {
+		return errors.New("user not found")
+	}
+	target.Username = username
+	target.Email = email
+	s.users[username] = target
+	return nil
+}
+
+func (s *authRepoStub) SetUserPassword(userID int64, passwordHash string) error {
+	for _, u := range s.users {
+		if u.ID == userID {
+			u.PasswordHash = passwordHash
+			return nil
+		}
+	}
+	return errors.New("user not found")
+}
+
+func (s *authRepoStub) DeleteUser(userID int64) error {
+	for key, u := range s.users {
+		if u.ID == userID {
+			delete(s.users, key)
+			return nil
+		}
+	}
+	return errors.New("user not found")
+}
+
 func saveAuthConfig() {
 	// Ensure defaults are applied (config globals may have been mutated).
 	if config.AuthTokenTTL <= 0 {

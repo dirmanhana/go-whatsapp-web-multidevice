@@ -338,6 +338,275 @@ func (s *serviceAuth) SetUserDisabled(ctx context.Context, userID int64, disable
 	return nil
 }
 
+// AdminCreateUser provisions an account chosen by an admin. Unlike Register
+// it is not gated by AuthAllowRegister: an operator always may create accounts
+// for their users, and may flag the new account as admin directly.
+func (s *serviceAuth) AdminCreateUser(ctx context.Context, request domainAuth.AdminCreateUserRequest) (domainAuth.AdminUserInfo, error) {
+	var info domainAuth.AdminUserInfo
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return info, err
+	}
+	if err := validations.ValidateAdminCreateUserRequest(ctx, request); err != nil {
+		return info, err
+	}
+	if s.storage == nil {
+		return info, fmt.Errorf("chat storage not initialized")
+	}
+
+	username := strings.TrimSpace(request.Username)
+	email := strings.TrimSpace(request.Email)
+	if username == "" {
+		username = s.deriveUsernameFromEmail(email)
+	}
+
+	if existing, err := s.storage.GetUserByUsername(username); err != nil {
+		return info, err
+	} else if existing != nil {
+		return info, pkgError.ErrUserAlreadyExists
+	}
+	if email != "" {
+		if existingByEmail, err := s.storage.GetUserByEmail(email); err != nil {
+			return info, err
+		} else if existingByEmail != nil {
+			return info, pkgError.ErrEmailAlreadyExists
+		}
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return info, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	id, err := s.storage.CreateUser(username, email, string(passwordHash))
+	if err != nil {
+		return info, err
+	}
+	if request.IsAdmin {
+		if err := s.storage.SetUserAdmin(id, true); err != nil {
+			return info, err
+		}
+	}
+	return s.adminInfo(id)
+}
+
+// AdminUpdateUser edits an account's username, email, or admin flag. Pointer
+// fields name exactly what changed; omitted fields keep their current value.
+func (s *serviceAuth) AdminUpdateUser(ctx context.Context, userID int64, request domainAuth.AdminUpdateUserRequest) (domainAuth.AdminUserInfo, error) {
+	var info domainAuth.AdminUserInfo
+	caller, err := s.requireAdmin(ctx)
+	if err != nil {
+		return info, err
+	}
+	if err := validations.ValidateAdminUpdateUserRequest(ctx, request); err != nil {
+		return info, err
+	}
+	if s.storage == nil {
+		return info, fmt.Errorf("chat storage not initialized")
+	}
+
+	target, err := s.storage.GetUserByID(userID)
+	if err != nil {
+		return info, err
+	}
+	if target == nil {
+		return info, pkgError.ErrUserNotFound
+	}
+
+	username, email := target.Username, target.Email
+	if request.Username != nil {
+		username = *request.Username
+		if existing, err := s.storage.GetUserByUsername(username); err != nil {
+			return info, err
+		} else if existing != nil && existing.ID != userID {
+			return info, pkgError.ErrUserAlreadyExists
+		}
+	}
+	if request.Email != nil {
+		email = *request.Email
+		if existing, err := s.storage.GetUserByEmail(email); err != nil {
+			return info, err
+		} else if existing != nil && existing.ID != userID {
+			return info, pkgError.ErrEmailAlreadyExists
+		}
+	}
+	if username != target.Username || email != target.Email {
+		if err := s.storage.UpdateUser(userID, username, email); err != nil {
+			return info, err
+		}
+	}
+
+	if request.IsAdmin != nil && *request.IsAdmin != target.IsAdmin {
+		// An admin can never demote themselves: two admins could otherwise
+		// demote each other and leave the deployment with no admin at all.
+		if !*request.IsAdmin && caller.ID == userID {
+			return info, pkgError.ErrCannotDemoteSelf
+		}
+		if err := s.storage.SetUserAdmin(userID, *request.IsAdmin); err != nil {
+			return info, err
+		}
+	}
+	return s.adminInfo(userID)
+}
+
+// AdminSetUserPassword resets an account's password and revokes every session
+// of that account: the old password must stop working everywhere at once.
+func (s *serviceAuth) AdminSetUserPassword(ctx context.Context, userID int64, password string) error {
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return err
+	}
+	if err := validations.ValidateAdminPasswordRequest(ctx, domainAuth.AdminPasswordRequest{Password: password}); err != nil {
+		return err
+	}
+	if s.storage == nil {
+		return fmt.Errorf("chat storage not initialized")
+	}
+
+	target, err := s.storage.GetUserByID(userID)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return pkgError.ErrUserNotFound
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+	if err := s.storage.SetUserPassword(userID, string(passwordHash)); err != nil {
+		return err
+	}
+	return s.storage.DeleteUserAuthTokens(userID)
+}
+
+// AdminDeleteUser removes an account. Guards: an admin cannot delete their own
+// account, and an account that still owns WhatsApp devices must have those
+// devices removed first — deleting the row would strand their sessions with no
+// owner to manage them.
+func (s *serviceAuth) AdminDeleteUser(ctx context.Context, userID int64) error {
+	caller, err := s.requireAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	if caller.ID == userID {
+		return pkgError.ErrCannotDeleteSelf
+	}
+	if s.storage == nil {
+		return fmt.Errorf("chat storage not initialized")
+	}
+
+	target, err := s.storage.GetUserByID(userID)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return pkgError.ErrUserNotFound
+	}
+
+	deviceCount, err := s.storage.CountUserDevices(userID)
+	if err != nil {
+		return err
+	}
+	if deviceCount > 0 {
+		return pkgError.ErrUserOwnsDevices
+	}
+
+	// auth_tokens has no ON DELETE CASCADE, so revoke first.
+	if err := s.storage.DeleteUserAuthTokens(userID); err != nil {
+		return err
+	}
+	return s.storage.DeleteUser(userID)
+}
+
+// ChangeOwnPassword rotates the authenticated user's password after proving
+// knowledge of the current one. Every Bearer session of that user is revoked:
+// the dashboard's Basic credentials are stateless and simply start failing
+// until the user signs in with the new password.
+func (s *serviceAuth) ChangeOwnPassword(ctx context.Context, request domainAuth.ChangePasswordRequest) error {
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return pkgError.ErrUnauthorized
+	}
+	if err := validations.ValidateChangePasswordRequest(ctx, request); err != nil {
+		return err
+	}
+	if s.storage == nil {
+		return fmt.Errorf("chat storage not initialized")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(request.CurrentPassword)); err != nil {
+		return pkgError.ErrCurrentPasswordBad
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+	if err := s.storage.SetUserPassword(user.ID, string(passwordHash)); err != nil {
+		return err
+	}
+	return s.storage.DeleteUserAuthTokens(user.ID)
+}
+
+// ChangeOwnEmail swaps the authenticated user's email after verifying the
+// account password, so a hijacked session cannot silently steal the address.
+func (s *serviceAuth) ChangeOwnEmail(ctx context.Context, request domainAuth.ChangeEmailRequest) (domainAuth.UserInfo, error) {
+	var info domainAuth.UserInfo
+	user, ok := domainChatStorage.UserFromContext(ctx)
+	if !ok || user == nil {
+		return info, pkgError.ErrUnauthorized
+	}
+	request.Email = strings.TrimSpace(request.Email)
+	if err := validations.ValidateChangeEmailRequest(ctx, request); err != nil {
+		return info, err
+	}
+	if s.storage == nil {
+		return info, fmt.Errorf("chat storage not initialized")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(request.CurrentPassword)); err != nil {
+		return info, pkgError.ErrCurrentPasswordBad
+	}
+
+	if existing, err := s.storage.GetUserByEmail(request.Email); err != nil {
+		return info, err
+	} else if existing != nil && existing.ID != user.ID {
+		return info, pkgError.ErrEmailAlreadyExists
+	}
+	if err := s.storage.UpdateUser(user.ID, user.Username, request.Email); err != nil {
+		return info, err
+	}
+
+	deviceCount, _ := s.storage.CountUserDevices(user.ID)
+	return domainAuth.UserInfo{
+		ID:          user.ID,
+		Username:    user.Username,
+		Email:       request.Email,
+		DeviceCount: deviceCount,
+		IsAdmin:     user.IsAdmin,
+	}, nil
+}
+
+// adminInfo re-reads an account and renders the admin-facing view of it, so
+// every admin mutation returns the same shape as ListUsers.
+func (s *serviceAuth) adminInfo(userID int64) (domainAuth.AdminUserInfo, error) {
+	user, err := s.storage.GetUserByID(userID)
+	if err != nil {
+		return domainAuth.AdminUserInfo{}, err
+	}
+	if user == nil {
+		return domainAuth.AdminUserInfo{}, pkgError.ErrUserNotFound
+	}
+	deviceCount, _ := s.storage.CountUserDevices(user.ID)
+	return domainAuth.AdminUserInfo{
+		ID:          user.ID,
+		Username:    user.Username,
+		Email:       user.Email,
+		IsAdmin:     user.IsAdmin,
+		Disabled:    user.Disabled,
+		DeviceCount: deviceCount,
+		CreatedAt:   user.CreatedAt,
+	}, nil
+}
+
 // requireAdmin resolves the caller from the request context and enforces the
 // admin flag.
 func (s *serviceAuth) requireAdmin(ctx context.Context) (*domainChatStorage.User, error) {

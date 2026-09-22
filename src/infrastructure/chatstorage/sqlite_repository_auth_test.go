@@ -353,3 +353,74 @@ func TestDeviceOwnerClaim(t *testing.T) {
 		t.Fatalf("expected other user to own 0 devices, got %d (err=%v)", count, err)
 	}
 }
+func TestUpdateUserMutations(t *testing.T) {
+	repo := newTestSQLiteRepository(t)
+
+	id, err := repo.CreateUser("alice", "alice@example.com", "hash-1")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// UpdateUser rewrites the identity fields; lookups follow the new values.
+	if err := repo.UpdateUser(id, "alice.renamed", "renamed@example.com"); err != nil {
+		t.Fatalf("update user: %v", err)
+	}
+	renamed, err := repo.GetUserByUsername("alice.renamed")
+	if err != nil || renamed == nil {
+		t.Fatalf("renamed lookup failed: user=%+v err=%v", renamed, err)
+	}
+	if renamed.Email != "renamed@example.com" {
+		t.Fatalf("expected new email, got %q", renamed.Email)
+	}
+	if old, err := repo.GetUserByUsername("alice"); err != nil || old != nil {
+		t.Fatalf("old username must be gone: user=%+v err=%v", old, err)
+	}
+
+	// A blank username is rejected: it would break every identifier lookup.
+	if err := repo.UpdateUser(id, "  ", "x@example.com"); err == nil {
+		t.Fatal("expected blank username to be rejected")
+	}
+
+	// SetUserPassword swaps only the hash.
+	if err := repo.SetUserPassword(id, "hash-2"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+	updated, err := repo.GetUserByID(id)
+	if err != nil || updated == nil {
+		t.Fatalf("reload failed: user=%+v err=%v", updated, err)
+	}
+	if updated.PasswordHash != "hash-2" {
+		t.Fatalf("expected hash-2, got %q", updated.PasswordHash)
+	}
+	if err := repo.SetUserPassword(id, ""); err == nil {
+		t.Fatal("expected blank hash to be rejected")
+	}
+
+	// DeleteUser removes the row; its tokens are NOT cascaded (auth_tokens has
+	// no foreign key), so the caller must revoke them first — assert both.
+	if err := repo.CreateAuthToken("token-of-alice", id, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if err := repo.DeleteUser(id); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	if gone, err := repo.GetUserByID(id); err != nil || gone != nil {
+		t.Fatalf("user must be gone: user=%+v err=%v", gone, err)
+	}
+	var tokenCount int
+	if err := repo.db.QueryRow("SELECT COUNT(*) FROM auth_tokens WHERE user_id = ?", id).Scan(&tokenCount); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokenCount != 1 {
+		t.Fatalf("expected the orphaned token to survive deletion, got %d", tokenCount)
+	}
+	if err := repo.DeleteUserAuthTokens(id); err != nil {
+		t.Fatalf("delete tokens: %v", err)
+	}
+	if err := repo.db.QueryRow("SELECT COUNT(*) FROM auth_tokens WHERE user_id = ?", id).Scan(&tokenCount); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokenCount != 0 {
+		t.Fatalf("expected tokens revoked, got %d", tokenCount)
+	}
+}

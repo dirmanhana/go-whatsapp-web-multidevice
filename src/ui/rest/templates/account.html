@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account settings — GOWA</title>
+<style>__INLINE_CSS__</style>
+</head>
+<body>
+<header class="topbar">
+	<div class="brand">Account settings</div>
+	<nav>
+		<a href="{{BASE_PATH}}/">Dashboard</a>
+		<a href="{{BASE_PATH}}/admin">Users</a>
+	</nav>
+</header>
+
+<main class="wrap">
+	<div id="page-error" class="error hidden"></div>
+	<div id="page-ok" class="notice hidden"></div>
+
+	<section class="card">
+		<h2>Your account</h2>
+		<dl class="kv">
+			<dt>Username</dt><dd id="me-username">—</dd>
+			<dt>Email</dt><dd id="me-email">—</dd>
+			<dt>Role</dt><dd id="me-role">—</dd>
+			<dt>Devices</dt><dd id="me-devices">—</dd>
+		</dl>
+	</section>
+
+	<div class="grid2">
+		<section class="card">
+			<h2>Change password</h2>
+			<form id="form-password">
+				<label for="p-current">Current password</label>
+				<input id="p-current" type="password" required autocomplete="current-password">
+				<label for="p-new">New password</label>
+				<input id="p-new" type="password" required minlength="6" maxlength="72" autocomplete="new-password">
+				<label for="p-confirm">Repeat new password</label>
+				<input id="p-confirm" type="password" required minlength="6" maxlength="72" autocomplete="new-password">
+				<div id="pw-error" class="error hidden"></div>
+				<div class="row" style="margin-top:16px">
+					<button class="btn primary" type="submit">Update password</button>
+				</div>
+			</form>
+			<p class="muted small" style="margin-bottom:0">The new password takes effect immediately and every API session on this account is signed out.</p>
+		</section>
+
+		<section class="card">
+			<h2>Change email</h2>
+			<form id="form-email">
+				<label for="e-current">Current password (confirmation)</label>
+				<input id="e-current" type="password" required autocomplete="current-password">
+				<label for="e-new">New email</label>
+				<input id="e-new" type="email" required maxlength="255" autocomplete="email" placeholder="you@example.com">
+				<div id="email-error" class="error hidden"></div>
+				<div class="row" style="margin-top:16px">
+					<button class="btn primary" type="submit">Update email</button>
+				</div>
+			</form>
+			<p class="muted small" style="margin-bottom:0">If you sign in with your email, the saved sign-in is updated to the new address automatically.</p>
+		</section>
+	</div>
+</main>
+
+<script>__INLINE_JS__</script>
+<script>
+(function () {
+	var G = window.GOWA;
+	var $ = function (id) { return document.getElementById(id); };
+	var me = null;
+
+	function fill(user) {
+		me = user;
+		$('me-username').textContent = user.username || '—';
+		$('me-email').textContent = user.email || '—';
+		$('me-role').textContent = user.is_admin ? 'Admin' : 'User';
+		$('me-devices').textContent = String(user.device_count || 0);
+		$('e-new').value = user.email || '';
+	}
+
+	$('form-password').addEventListener('submit', async function (ev) {
+		ev.preventDefault();
+		G.showMessage($('pw-error'), '');
+		G.showMessage($('page-ok'), '');
+		var next = $('p-new').value;
+		if (next !== $('p-confirm').value) {
+			G.showMessage($('pw-error'), 'The new passwords do not match.');
+			return;
+		}
+		var submit = ev.target.querySelector('button[type=submit]');
+		submit.disabled = true;
+		try {
+			var usingToken = !!(G.readState() && G.readState().token);
+			await G.api('/auth/me/password', {
+				method: 'POST',
+				body: JSON.stringify({ current_password: $('p-current').value, password: next })
+			});
+			// Dashboard sessions replay stored Basic credentials: keep them in
+			// sync so the user is not logged out by their own password change.
+			G.updateStoredLogin({ password: next });
+			ev.target.reset();
+			if (usingToken) {
+				// Bearer sessions were revoked by the server; sign in again.
+				G.showMessage($('page-ok'), 'Password updated. Please sign in again.');
+				setTimeout(G.goHome, 1500);
+			} else {
+				G.showMessage($('page-ok'), 'Password updated.', 'ok');
+			}
+		} catch (e) {
+			G.showMessage($('pw-error'), e.message);
+		} finally {
+			submit.disabled = false;
+		}
+	});
+
+	$('form-email').addEventListener('submit', async function (ev) {
+		ev.preventDefault();
+		G.showMessage($('email-error'), '');
+		G.showMessage($('page-ok'), '');
+		var submit = ev.target.querySelector('button[type=submit]');
+		var previousEmail = me ? me.email : '';
+		var nextEmail = $('e-new').value.trim();
+		submit.disabled = true;
+		try {
+			var updated = await G.api('/auth/me/email', {
+				method: 'POST',
+				body: JSON.stringify({ current_password: $('e-current').value, email: nextEmail })
+			});
+			// If the saved sign-in identifier was the old email, follow the
+			// change so the dashboard's Basic credentials keep matching.
+			var state = G.readState();
+			if (state && !state.token && previousEmail &&
+				state.username && state.username.toLowerCase() === previousEmail.toLowerCase()) {
+				G.updateStoredLogin({ username: updated.email });
+			}
+			$('e-current').value = '';
+			fill(updated);
+			G.showMessage($('page-ok'), 'Email updated.', 'ok');
+		} catch (e) {
+			G.showMessage($('email-error'), e.message);
+		} finally {
+			submit.disabled = false;
+		}
+	});
+
+	(async function boot() {
+		try {
+			fill(await G.api('/auth/me'));
+		} catch (e) {
+			G.showMessage($('page-error'), e.message);
+		}
+	})();
+})();
+</script>
+</body>
+</html>

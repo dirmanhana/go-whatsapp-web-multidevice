@@ -145,6 +145,16 @@ type IChatStorageRepository interface {
 	SetUserDisabled(userID int64, disabled bool) error
 	// ListUsers returns all accounts, ordered by id.
 	ListUsers() ([]User, error)
+	// UpdateUser rewrites the editable identity fields (username, email) of an
+	// account. Callers must check for conflicts first; the unique indexes are
+	// the final guard.
+	UpdateUser(userID int64, username, email string) error
+	// SetUserPassword replaces the password hash of an account, e.g. on a
+	// self-service change or an admin reset.
+	SetUserPassword(userID int64, passwordHash string) error
+	// DeleteUser removes an account row. The caller must revoke the account's
+	// auth tokens first: the schema has no ON DELETE CASCADE.
+	DeleteUser(userID int64) error
 
 	// Schema operations
 	InitializeSchema() error

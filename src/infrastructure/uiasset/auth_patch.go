@@ -12,6 +12,11 @@
 //     (code UNAUTHORIZED) instead of every HTTP 401, so a temporarily
 //     disconnected WhatsApp device (SERVICE_UNAVAILABLE) no longer kicks the
 //     user back to the login page.
+//  5. Injects entry points to the pages this server hosts itself: an
+//     "Account" button (always, once signed in) opening /account, and a
+//     "Users" button opening /admin that only appears when GET /auth/me
+//     reports is_admin. The admin flag is enforced server-side regardless —
+//     the button merely keeps the navigation honest.
 //
 // The patch is applied at serve time (never to the cached file) and degrades
 // gracefully: if any marker string no longer matches an updated dashboard
@@ -105,6 +110,66 @@ const authUIInjection = `<style>
   document.body.appendChild(modal);
   if(window.MutationObserver){new MutationObserver(syncVisibility).observe(document.body,{childList:true,subtree:true})}
   syncVisibility();
+})();
+</script>
+<style>
+#gowa-account-btn,#gowa-admin-btn{position:fixed;bottom:24px;z-index:60;display:none;border:1px solid var(--border);border-radius:9999px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer;color:var(--foreground);background:var(--card);box-shadow:0 4px 16px rgba(0,0,0,.15)}
+#gowa-account-btn{right:24px}
+#gowa-admin-btn{right:124px}
+</style>
+<script>
+(function(){
+  // Entry points to the pages this server serves itself: account settings at
+  // /account (everyone) and the user-management panel at /admin (admins only).
+  // Like the register injection above, paths assume an empty AppBasePath.
+  var ORIGIN=window.location.origin,STORE='gowa-ui.connection.v1';
+  var acc=document.createElement('button');
+  acc.type='button';acc.id='gowa-account-btn';acc.textContent='Account';
+  var adm=document.createElement('button');
+  adm.type='button';adm.id='gowa-admin-btn';adm.textContent='Users';
+  function authHeaders(){
+    try{
+      var raw=localStorage.getItem(STORE);if(!raw)return null;
+      var p=JSON.parse(raw),s=(p&&p.state)||p||{};
+      if(s.token)return{Authorization:'Bearer '+s.token};
+      if(s.username&&s.password)return{Authorization:'Basic '+btoa(s.username+':'+s.password)};
+    }catch(e){}
+    return null;
+  }
+  var adminState=null,checkedAt=0;
+  async function isAdmin(){
+    var now=Date.now();
+    if(adminState!==null&&now-checkedAt<60000)return adminState;
+    var h=authHeaders();
+    if(!h){adminState=false;checkedAt=now;return false}
+    try{
+      var res=await fetch(ORIGIN+'/auth/me',{headers:h});
+      var data=res.ok?await res.json():null;
+      adminState=!!(data&&data.results&&data.results.is_admin);
+    }catch(e){adminState=false}
+    checkedAt=now;
+    return adminState;
+  }
+  async function sync(){
+    // "#username" exists only in the signed-in dashboard view (same marker the
+    // register button uses).
+    if(!document.getElementById('username')){acc.style.display='none';adm.style.display='none';return}
+    acc.style.display='';
+    adm.style.display=(await isAdmin())?'':'none';
+  }
+  acc.addEventListener('click',function(){window.location.href=ORIGIN+'/account'});
+  adm.addEventListener('click',function(){window.location.href=ORIGIN+'/admin'});
+  document.body.appendChild(acc);
+  document.body.appendChild(adm);
+  if(window.MutationObserver){
+    var pending=null;
+    new MutationObserver(function(){
+      if(pending)return;
+      pending=setTimeout(function(){pending=null;sync()},300);
+    }).observe(document.body,{childList:true,subtree:true});
+  }
+  sync();
+  setInterval(sync,60000);
 })();
 </script>
 </body>`

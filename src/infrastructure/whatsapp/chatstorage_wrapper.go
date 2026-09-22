@@ -406,3 +406,15 @@ func (r *deviceChatStorage) SetUserDisabled(userID int64, disabled bool) error {
 func (r *deviceChatStorage) ListUsers() ([]domainChatStorage.User, error) {
 	return r.base.ListUsers()
 }
+
+func (r *deviceChatStorage) UpdateUser(userID int64, username, email string) error {
+	return r.base.UpdateUser(userID, username, email)
+}
+
+func (r *deviceChatStorage) SetUserPassword(userID int64, passwordHash string) error {
+	return r.base.SetUserPassword(userID, passwordHash)
+}
+
+func (r *deviceChatStorage) DeleteUser(userID int64) error {
+	return r.base.DeleteUser(userID)
+}

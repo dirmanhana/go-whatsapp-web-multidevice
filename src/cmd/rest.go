@@ -150,6 +150,11 @@ func restServer(_ *cobra.Command, _ []string) {
 	// Multi-user auth routes (public: register, login; token-protected: logout, me)
 	rest.InitRestAuth(apiGroup, authUsecase)
 
+	// HTML pages: admin panel (/admin) and self-service settings (/account).
+	// Registered after AuthMiddleware like everything else; both are listed as
+	// public paths because they serve markup only.
+	rest.InitRestPages(apiGroup)
+
 	// App info (version, limits) for standalone UIs; no device required
 	rest.InitRestAppInfo(apiGroup)
 

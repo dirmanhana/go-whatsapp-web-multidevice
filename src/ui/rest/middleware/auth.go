@@ -114,11 +114,15 @@ func AuthMiddleware(auth TokenAuthenticator) fiber.Handler {
 
 // isPublicAuthPath reports whether a path stays reachable without a token in
 // multi-user mode: the landing page/UI root and the register/login endpoints.
+// The /admin and /account HTML shells are public for the same reason the
+// dashboard "/" is: they ship markup only, and every request their JavaScript
+// makes (data included) still passes through this middleware below.
 func isPublicAuthPath(path string) bool {
 	if path == "/" || path == "" || path == config.AppBasePath || path == config.AppBasePath+"/" {
 		return true
 	}
-	return strings.HasSuffix(path, "/auth/register") || strings.HasSuffix(path, "/auth/login")
+	return strings.HasSuffix(path, "/auth/register") || strings.HasSuffix(path, "/auth/login") ||
+		strings.HasSuffix(path, "/admin") || strings.HasSuffix(path, "/account")
 }
 
 func unauthorizedResponse(c fiber.Ctx) error {

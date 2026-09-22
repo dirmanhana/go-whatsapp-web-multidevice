@@ -50,6 +50,47 @@ type LoginResponse struct {
 	User      UserInfo  `json:"user"`
 }
 
+// AdminCreateUserRequest creates an account on behalf of an operator. Email
+// and Username follow the same rules as self-service registration: at least
+// one is required, and a missing username is derived from the email.
+type AdminCreateUserRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	// IsAdmin grants the admin flag at creation time.
+	IsAdmin bool `json:"is_admin"`
+}
+
+// AdminUpdateUserRequest edits an account. Pointer fields distinguish "not
+// provided" from an explicit empty/false value, so a partial payload only
+// touches what it names.
+type AdminUpdateUserRequest struct {
+	Username *string `json:"username"`
+	Email    *string `json:"email"`
+	IsAdmin  *bool   `json:"is_admin"`
+}
+
+// AdminPasswordRequest resets an account's password (admin action).
+type AdminPasswordRequest struct {
+	Password string `json:"password"`
+}
+
+// ChangePasswordRequest is the self-service password rotation: the current
+// password must accompany the new one so a hijacked session cannot silently
+// lock the owner out.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Password        string `json:"password"`
+}
+
+// ChangeEmailRequest is the self-service email change, confirmed with the
+// account password for the same reason as ChangePasswordRequest.
+type ChangeEmailRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Email           string `json:"email"`
+}
+
+
 // SessionInfo is a masked view of one issued auth session. TokenID is the
 // prefix of the stored token digest, stable across calls but not usable as
 // a credential.
@@ -85,4 +126,25 @@ type IAuthUsecase interface {
 	// SetUserDisabled enables or disables an account (ban); admin only.
 	// Disabling revokes the user's sessions.
 	SetUserDisabled(ctx context.Context, userID int64, disabled bool) error
+	// AdminCreateUser creates an account chosen by an admin (username/email/
+	// password, optional admin flag); admin only. Unlike Register it is not
+	// gated by AuthAllowRegister: an admin always may provision accounts.
+	AdminCreateUser(ctx context.Context, request AdminCreateUserRequest) (AdminUserInfo, error)
+	// AdminUpdateUser edits an account's username, email, or admin flag;
+	// admin only. An admin can never demote themselves, so the deployment can
+	// never end up with zero admins.
+	AdminUpdateUser(ctx context.Context, userID int64, request AdminUpdateUserRequest) (AdminUserInfo, error)
+	// AdminSetUserPassword resets an account's password and revokes that
+	// account's sessions; admin only.
+	AdminSetUserPassword(ctx context.Context, userID int64, password string) error
+	// AdminDeleteUser removes an account; admin only. An admin cannot delete
+	// themselves, and an account that still owns WhatsApp devices must have
+	// those devices removed first.
+	AdminDeleteUser(ctx context.Context, userID int64) error
+	// ChangeOwnPassword rotates the authenticated user's password after
+	// verifying the current one, and revokes that user's other sessions.
+	ChangeOwnPassword(ctx context.Context, request ChangePasswordRequest) error
+	// ChangeOwnEmail changes the authenticated user's email after verifying
+	// the account password.
+	ChangeOwnEmail(ctx context.Context, request ChangeEmailRequest) (UserInfo, error)
 }
