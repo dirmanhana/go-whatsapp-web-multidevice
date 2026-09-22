@@ -41,6 +41,6 @@ tmp/
 # Local Superpowers planning artifacts
 docs/superpowers/
 
-# whatsmeow store (legacy path)
-src/whatsapp/
+# whatsmeow store (legacy path) + `go build -o whatsapp` output
+src/whatsapp
 .mcp.json
