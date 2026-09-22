@@ -3,64 +3,101 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Account settings — GOWA</title>
-<style>__INLINE_CSS__</style>
+<title>Account settings — gowa</title>
+<script>
+/* Mirror the dashboard's theme: same localStorage key, same system default. */
+(function(){try{var t=localStorage.getItem('theme')||'system';var d=(t==='dark')||(t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();
+</script>
+<style>__APP_CSS__</style>
+<style>
+/* Tiny helpers for bits the app's compiled utilities don't cover. */
+.hidden{display:none!important}
+.gowa-overlay{display:flex;align-items:center;justify-content:center;background:oklch(18% .016 235/.45);backdrop-filter:blur(2px)}
+</style>
 </head>
-<body>
-<header class="topbar">
-	<div class="brand">Account settings</div>
-	<nav>
-		<a href="{{BASE_PATH}}/">Dashboard</a>
-		<a href="{{BASE_PATH}}/admin">Users</a>
-	</nav>
+<body class="flex min-h-svh flex-col bg-background text-foreground">
+<header class="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4">
+	<div class="flex items-center gap-2">
+		<a href="{{BASE_PATH}}/" class="flex items-center gap-2" aria-label="Back to dashboard">
+			<span class="text-lg font-semibold tracking-tight">gowa</span>
+		</a>
+		<span class="h-4 w-px bg-border" aria-hidden="true"></span>
+		<span class="text-sm text-muted-foreground">Account settings</span>
+	</div>
+	<a href="{{BASE_PATH}}/" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5">Back to dashboard</a>
 </header>
 
-<main class="wrap">
-	<div id="page-error" class="error hidden"></div>
-	<div id="page-ok" class="notice hidden"></div>
+<main class="flex-1 p-4 md:p-6">
+	<div class="mx-auto flex max-w-5xl flex-col gap-5 pb-6">
+		<div id="page-error" class="hidden"></div>
+		<div id="page-ok" class="hidden"></div>
 
-	<section class="card">
-		<h2>Your account</h2>
-		<dl class="kv">
-			<dt>Username</dt><dd id="me-username">—</dd>
-			<dt>Email</dt><dd id="me-email">—</dd>
-			<dt>Role</dt><dd id="me-role">—</dd>
-			<dt>Devices</dt><dd id="me-devices">—</dd>
-		</dl>
-	</section>
-
-	<div class="grid2">
-		<section class="card">
-			<h2>Change password</h2>
-			<form id="form-password">
-				<label for="p-current">Current password</label>
-				<input id="p-current" type="password" required autocomplete="current-password">
-				<label for="p-new">New password</label>
-				<input id="p-new" type="password" required minlength="6" maxlength="72" autocomplete="new-password">
-				<label for="p-confirm">Repeat new password</label>
-				<input id="p-confirm" type="password" required minlength="6" maxlength="72" autocomplete="new-password">
-				<div id="pw-error" class="error hidden"></div>
-				<div class="row" style="margin-top:16px">
-					<button class="btn primary" type="submit">Update password</button>
+		<section class="rounded-xl bg-card p-6 text-card-foreground ring-1 ring-foreground/10">
+			<h1 class="font-heading text-base leading-snug font-medium">Your account</h1>
+			<p class="text-sm text-muted-foreground">Sign-in details and role on this server.</p>
+			<dl class="mt-2 grid grid-cols-2 gap-4">
+				<div class="flex flex-col gap-1">
+					<dt class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Username</dt>
+					<dd class="text-sm" id="me-username">—</dd>
 				</div>
-			</form>
-			<p class="muted small" style="margin-bottom:0">The new password takes effect immediately and every API session on this account is signed out.</p>
+				<div class="flex flex-col gap-1">
+					<dt class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Email</dt>
+					<dd class="text-sm" id="me-email">—</dd>
+				</div>
+				<div class="flex flex-col gap-1">
+					<dt class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Role</dt>
+					<dd class="text-sm" id="me-role">—</dd>
+				</div>
+				<div class="flex flex-col gap-1">
+					<dt class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Devices</dt>
+					<dd class="text-sm" id="me-devices">—</dd>
+				</div>
+			</dl>
 		</section>
 
-		<section class="card">
-			<h2>Change email</h2>
-			<form id="form-email">
-				<label for="e-current">Current password (confirmation)</label>
-				<input id="e-current" type="password" required autocomplete="current-password">
-				<label for="e-new">New email</label>
-				<input id="e-new" type="email" required maxlength="255" autocomplete="email" placeholder="you@example.com">
-				<div id="email-error" class="error hidden"></div>
-				<div class="row" style="margin-top:16px">
-					<button class="btn primary" type="submit">Update email</button>
-				</div>
-			</form>
-			<p class="muted small" style="margin-bottom:0">If you sign in with your email, the saved sign-in is updated to the new address automatically.</p>
-		</section>
+		<div class="grid gap-5 lg:grid-cols-2">
+			<section class="rounded-xl bg-card p-6 text-card-foreground ring-1 ring-foreground/10">
+				<h2 class="font-heading text-base leading-snug font-medium">Change password</h2>
+				<p class="text-sm text-muted-foreground">The new password takes effect immediately and every API session on this account is signed out.</p>
+				<form id="form-password" class="mt-2 flex flex-col gap-3">
+					<div class="flex flex-col gap-1.5">
+						<label for="p-current" class="text-sm font-medium">Current password</label>
+						<input id="p-current" type="password" required autocomplete="current-password" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label for="p-new" class="text-sm font-medium">New password</label>
+						<input id="p-new" type="password" required minlength="6" maxlength="72" autocomplete="new-password" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label for="p-confirm" class="text-sm font-medium">Repeat new password</label>
+						<input id="p-confirm" type="password" required minlength="6" maxlength="72" autocomplete="new-password" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+					</div>
+					<div id="pw-error" class="hidden"></div>
+					<div class="flex justify-end">
+						<button type="submit" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">Update password</button>
+					</div>
+				</form>
+			</section>
+
+			<section class="rounded-xl bg-card p-6 text-card-foreground ring-1 ring-foreground/10">
+				<h2 class="font-heading text-base leading-snug font-medium">Change email</h2>
+				<p class="text-sm text-muted-foreground">If you sign in with your email, the saved sign-in is updated to the new address automatically.</p>
+				<form id="form-email" class="mt-2 flex flex-col gap-3">
+					<div class="flex flex-col gap-1.5">
+						<label for="e-current" class="text-sm font-medium">Current password (confirmation)</label>
+						<input id="e-current" type="password" required autocomplete="current-password" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label for="e-new" class="text-sm font-medium">New email</label>
+						<input id="e-new" type="email" required maxlength="255" autocomplete="email" placeholder="you@example.com" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+					</div>
+					<div id="email-error" class="hidden"></div>
+					<div class="flex justify-end">
+						<button type="submit" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">Update email</button>
+					</div>
+				</form>
+			</section>
+		</div>
 	</div>
 </main>
 
@@ -103,7 +140,7 @@
 			ev.target.reset();
 			if (usingToken) {
 				// Bearer sessions were revoked by the server; sign in again.
-				G.showMessage($('page-ok'), 'Password updated. Please sign in again.');
+				G.showMessage($('page-ok'), 'Password updated. Please sign in again.', 'ok');
 				setTimeout(G.goHome, 1500);
 			} else {
 				G.showMessage($('page-ok'), 'Password updated.', 'ok');

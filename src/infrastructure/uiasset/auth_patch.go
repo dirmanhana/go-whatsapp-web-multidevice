@@ -12,11 +12,12 @@
 //     (code UNAUTHORIZED) instead of every HTTP 401, so a temporarily
 //     disconnected WhatsApp device (SERVICE_UNAVAILABLE) no longer kicks the
 //     user back to the login page.
-//  5. Injects entry points to the pages this server hosts itself: an
-//     "Account" button (always, once signed in) opening /account, and a
-//     "Users" button opening /admin that only appears when GET /auth/me
-//     reports is_admin. The admin flag is enforced server-side regardless —
-//     the button merely keeps the navigation honest.
+//  5. Adds the features this server hosts itself to the dashboard's own
+//     sidebar menu, matching the app's navigation style: an "Account
+//     settings" item opening /account (every signed-in user) and a "Users"
+//     item opening /admin that only appears when GET /auth/me reports
+//     is_admin. The admin flag is enforced server-side regardless — the item
+//     merely keeps the navigation honest.
 //
 // The patch is applied at serve time (never to the cached file) and degrades
 // gracefully: if any marker string no longer matches an updated dashboard
@@ -55,6 +56,9 @@ const (
 	headerCopyPatched = "Your credentials are stored in this browser only."
 )
 
+// authUIInjection adds the register entry point on the login card. It appears
+// on every view; the button itself is only visible while the login form is on
+// screen (the username input only exists there).
 const authUIInjection = `<style>
 #gowa-register-btn{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:60;border:1px solid var(--border);border-radius:9999px;padding:8px 18px;font:inherit;font-size:13px;cursor:pointer;color:var(--foreground);background:var(--card);box-shadow:0 4px 16px rgba(0,0,0,.15)}
 #gowa-register-modal{position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);padding:16px}
@@ -111,22 +115,33 @@ const authUIInjection = `<style>
   if(window.MutationObserver){new MutationObserver(syncVisibility).observe(document.body,{childList:true,subtree:true})}
   syncVisibility();
 })();
-</script>
-<style>
-#gowa-account-btn,#gowa-admin-btn{position:fixed;bottom:24px;z-index:60;display:none;border:1px solid var(--border);border-radius:9999px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer;color:var(--foreground);background:var(--card);box-shadow:0 4px 16px rgba(0,0,0,.15)}
-#gowa-account-btn{right:24px}
-#gowa-admin-btn{right:124px}
-</style>
-<script>
+</script>`
+
+// authEntryInjection adds the two server-hosted pages to the dashboard's own
+// sidebar. The menu mirrors the group markup the app renders from its lD
+// array (uppercase group label + NavLink rows), but uses plain <a> anchors:
+// the SPA router only knows its own routes, so /account and /admin must force
+// a full page load to reach the pages this server serves. A MutationObserver
+// re-applies the group whenever React re-renders the nav (route changes,
+// drawer mounts), and the admin item's visibility is driven by GET /auth/me.
+// __GOWA_BASE__ is replaced with config.AppBasePath at serve time.
+const authEntryInjection = `<script>
 (function(){
-  // Entry points to the pages this server serves itself: account settings at
-  // /account (everyone) and the user-management panel at /admin (admins only).
-  // Like the register injection above, paths assume an empty AppBasePath.
-  var ORIGIN=window.location.origin,STORE='gowa-ui.connection.v1';
-  var acc=document.createElement('button');
-  acc.type='button';acc.id='gowa-account-btn';acc.textContent='Account';
-  var adm=document.createElement('button');
-  adm.type='button';adm.id='gowa-admin-btn';adm.textContent='Users';
+  // Reconciles with the dashboard's own sidebar: label group (uppercase,
+  // tracked wide) plus rounded-full NavLink rows, as rendered by uD/lD in the
+  // minified bundle. Anchors navigate with a full page load on purpose.
+  var BASE='__GOWA_BASE__';
+  var ICON_ACCOUNT='<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>';
+  var ICON_USERS='<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+  var STORE='gowa-ui.connection.v1';
+  function navs(){
+    var out=[];
+    document.querySelectorAll('nav').forEach(function(n){
+      var c=n.classList;
+      if(c.contains('flex')&&c.contains('flex-col')&&c.contains('gap-4'))out.push(n);
+    });
+    return out;
+  }
   function authHeaders(){
     try{
       var raw=localStorage.getItem(STORE);if(!raw)return null;
@@ -143,41 +158,71 @@ const authUIInjection = `<style>
     var h=authHeaders();
     if(!h){adminState=false;checkedAt=now;return false}
     try{
-      var res=await fetch(ORIGIN+'/auth/me',{headers:h});
+      var res=await fetch(window.location.origin+'/auth/me',{headers:h});
       var data=res.ok?await res.json():null;
       adminState=!!(data&&data.results&&data.results.is_admin);
     }catch(e){adminState=false}
     checkedAt=now;
     return adminState;
   }
-  async function sync(){
-    // "#username" exists only in the signed-in dashboard view (same marker the
-    // register button uses).
-    if(!document.getElementById('username')){acc.style.display='none';adm.style.display='none';return}
-    acc.style.display='';
-    adm.style.display=(await isAdmin())?'':'none';
+  function syncAdmin(){
+    isAdmin().then(function(ok){
+      document.querySelectorAll('[data-gowa-admin]').forEach(function(el){el.style.display=ok?'':'none'});
+    });
   }
-  acc.addEventListener('click',function(){window.location.href=ORIGIN+'/account'});
-  adm.addEventListener('click',function(){window.location.href=ORIGIN+'/admin'});
-  document.body.appendChild(acc);
-  document.body.appendChild(adm);
+  function makeGroup(){
+    var g=document.createElement('div');
+    g.className='flex flex-col gap-1';
+    g.setAttribute('data-gowa-menu','1');
+    var p=document.createElement('p');
+    p.className='text-muted-foreground px-3 text-[11px] font-medium tracking-wider uppercase';
+    p.textContent='Account';
+    g.appendChild(p);
+    function row(href,label,icon,admin){
+      var a=document.createElement('a');
+      a.href=BASE+href;
+      a.className='flex items-center gap-2.5 rounded-full px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground';
+      var ic=document.createElement('span');
+      ic.className='size-4 shrink-0';
+      ic.innerHTML=icon;
+      var tx=document.createElement('span');
+      tx.textContent=label;
+      a.appendChild(ic);
+      a.appendChild(tx);
+      if(admin){a.setAttribute('data-gowa-admin','1')}
+      return a;
+    }
+    g.appendChild(row('/account','Account settings',ICON_ACCOUNT,false));
+    g.appendChild(row('/admin','Users',ICON_USERS,true));
+    return g;
+  }
+  function inject(){
+    var changed=false;
+    navs().forEach(function(nav){
+      if(nav.querySelector('[data-gowa-menu]'))return;
+      nav.appendChild(makeGroup());
+      changed=true;
+    });
+    if(adminState===null)syncAdmin();
+  }
+  inject();
   if(window.MutationObserver){
     var pending=null;
     new MutationObserver(function(){
       if(pending)return;
-      pending=setTimeout(function(){pending=null;sync()},300);
+      pending=setTimeout(function(){pending=null;inject()},250);
     }).observe(document.body,{childList:true,subtree:true});
   }
-  sync();
-  setInterval(sync,60000);
+  setInterval(syncAdmin,60000);
 })();
-</script>
-</body>`
+</script>`
 
 // ApplyAuthUIPatch rewrites the served dashboard HTML for the multi-user
 // login/register flow. Each replacement is independent: unmatched markers
-// (a newer dashboard build) are left untouched.
-func ApplyAuthUIPatch(content []byte) []byte {
+// (a newer dashboard build) are left untouched. basePath is config.AppBasePath
+// and is baked into the injected navigation so deep links survive a non-empty
+// base path.
+func ApplyAuthUIPatch(content []byte, basePath string) []byte {
 	if len(content) == 0 {
 		return content
 	}
@@ -185,6 +230,7 @@ func ApplyAuthUIPatch(content []byte) []byte {
 	patched = strings.ReplaceAll(patched, loginSubmit, loginSubmitOrigin)
 	patched = strings.ReplaceAll(patched, responseInterceptor, responseInterceptorKeep)
 	patched = strings.ReplaceAll(patched, headerCopy, headerCopyPatched)
-	patched = strings.ReplaceAll(patched, "</body>", authUIInjection)
+	entry := strings.ReplaceAll(authEntryInjection, "__GOWA_BASE__", basePath)
+	patched = strings.ReplaceAll(patched, "</body>", authUIInjection+entry)
 	return []byte(patched)
 }

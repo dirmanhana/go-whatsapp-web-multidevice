@@ -150,13 +150,19 @@ func restServer(_ *cobra.Command, _ []string) {
 	// Multi-user auth routes (public: register, login; token-protected: logout, me)
 	rest.InitRestAuth(apiGroup, authUsecase)
 
-	// HTML pages: admin panel (/admin) and self-service settings (/account).
-	// Registered after AuthMiddleware like everything else; both are listed as
-	// public paths because they serve markup only.
-	rest.InitRestPages(apiGroup)
-
 	// App info (version, limits) for standalone UIs; no device required
 	rest.InitRestAppInfo(apiGroup)
+
+	// HTML pages: admin panel (/admin) and self-service settings (/account),
+	// plus the dashboard at "/". They inline the dashboard's compiled CSS, so
+	// they need the same cached bundle the "/" route serves. Registered here —
+	// before the device-scoped group mounts DeviceMiddleware on the empty
+	// prefix — so the pages are NOT wrapped by it: like "/", they are public
+	// markup (all data access is authenticated server-side, and both routes are
+	// listed as public paths in AuthMiddleware for the same reason).
+	uiCtx, uiCancel := context.WithCancel(context.Background())
+	defer uiCancel()
+	registerUIRoute(apiGroup, uiCtx)
 
 	// MCP endpoint — same usecase instances as REST, so both surfaces share
 	// one whatsmeow session. Sits behind the basic-auth middleware above and
@@ -187,13 +193,6 @@ func restServer(_ *cobra.Command, _ []string) {
 		apiGroup.Put("/devices/:device_id/chatwoot/config", chatwootHandler.UpsertChatwootConfig)
 		apiGroup.Delete("/devices/:device_id/chatwoot/config", chatwootHandler.DeleteChatwootConfig)
 	}
-
-	// Dashboard: gowa-ui is a separate project released as one HTML file;
-	// serve the runtime-downloaded copy at "/" (behind basic auth like the
-	// rest of the API surface).
-	uiCtx, uiCancel := context.WithCancel(context.Background())
-	defer uiCancel()
-	registerUIRoute(apiGroup, uiCtx)
 
 	// Device-scoped websocket broadcasts are filtered per owning user in
 	// multi-user mode.
@@ -248,6 +247,23 @@ func restServer(_ *cobra.Command, _ []string) {
 }
 
 func registerUIRoute(apiGroup fiber.Router, ctx context.Context) {
+	// HTML pages: admin panel (/admin) and self-service settings (/account).
+	// They inline the dashboard's compiled CSS, so they need the same cached
+	// bundle the "/" route serves. Registered regardless of AppUIEnabled (like
+	// they always were). Both routes are listed as public paths in
+	// AuthMiddleware because they serve markup only.
+	var uiManager *uiasset.Manager
+	rest.InitRestPages(apiGroup, func() []byte {
+		if uiManager == nil {
+			return nil
+		}
+		content, _, ok := uiManager.Content()
+		if !ok {
+			return nil
+		}
+		return content
+	})
+
 	if !config.AppUIEnabled {
 		apiGroup.Get("/", func(c fiber.Ctx) error {
 			return c.JSON(utils.ResponseData{
@@ -259,7 +275,7 @@ func registerUIRoute(apiGroup fiber.Router, ctx context.Context) {
 		return
 	}
 
-	uiManager := uiasset.New(uiasset.Config{
+	uiManager = uiasset.New(uiasset.Config{
 		Repo:         config.AppUIRepo,
 		AssetName:    config.AppUIAssetName,
 		CacheDir:     config.PathUICache,
@@ -286,7 +302,7 @@ func registerUIRoute(apiGroup fiber.Router, ctx context.Context) {
 			return c.Send(uiasset.FallbackHTML(config.AppVersion, config.AppUIRepo))
 		}
 		if config.AuthEnabled {
-			content = uiasset.ApplyAuthUIPatch(content)
+			content = uiasset.ApplyAuthUIPatch(content, config.AppBasePath)
 			etag = uiasset.ContentSHA(content)
 		}
 		quoted := `"` + etag + `"`

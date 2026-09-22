@@ -73,18 +73,19 @@
 		});
 	}
 
-	// showMessage renders a transient banner inside a target element.
+	// showMessage renders a transient banner inside a target element. Banners
+	// reuse the app's compiled utility classes so these pages look native.
 	function showMessage(target, message, kind) {
 		if (!target) return;
 		if (!message) {
-			target.classList.add('hidden');
 			target.textContent = '';
+			target.className = 'hidden';
 			return;
 		}
 		target.textContent = message;
-		target.classList.remove('hidden');
-		target.classList.toggle('error', kind !== 'ok');
-		target.classList.toggle('notice', kind === 'ok');
+		target.className = (kind === 'ok')
+			? 'rounded-lg bg-secondary px-3 py-2.5 text-sm text-secondary-foreground'
+			: 'rounded-lg bg-destructive/10 px-3 py-2.5 text-sm text-destructive';
 	}
 
 	// updateStoredLogin patches the saved sign-in the dashboard replays on

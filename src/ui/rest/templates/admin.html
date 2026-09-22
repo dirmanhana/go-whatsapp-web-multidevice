@@ -3,110 +3,121 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>User management — GOWA</title>
-<style>__INLINE_CSS__</style>
+<title>User management — gowa</title>
+<script>
+/* Mirror the dashboard's theme: same localStorage key, same system default. */
+(function(){try{var t=localStorage.getItem('theme')||'system';var d=(t==='dark')||(t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();
+</script>
+<style>__APP_CSS__</style>
+<style>
+/* Tiny helpers for bits the app's compiled utilities don't cover. */
+.hidden{display:none!important}
+.gowa-overlay{display:flex;align-items:center;justify-content:center;background:oklch(18% .016 235/.45);backdrop-filter:blur(2px)}
+</style>
 </head>
-<body>
-<header class="topbar">
-	<div class="brand">User management</div>
-	<nav>
-		<a href="{{BASE_PATH}}/">Dashboard</a>
-		<a href="{{BASE_PATH}}/account">Account</a>
-	</nav>
+<body class="flex min-h-svh flex-col bg-background text-foreground">
+<header class="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4">
+	<div class="flex items-center gap-2">
+		<a href="{{BASE_PATH}}/" class="flex items-center gap-2" aria-label="Back to dashboard">
+			<span class="text-lg font-semibold tracking-tight">gowa</span>
+		</a>
+		<span class="h-4 w-px bg-border" aria-hidden="true"></span>
+		<span class="text-sm text-muted-foreground">User management</span>
+	</div>
+	<a href="{{BASE_PATH}}/" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5">Back to dashboard</a>
 </header>
 
-<main class="wrap">
-	<section id="guard" class="card hidden">
-		<h2 id="guard-title">Admin access required</h2>
-		<p id="guard-text" class="muted"></p>
-		<p style="margin-bottom:0"><a href="{{BASE_PATH}}/">Back to dashboard</a></p>
-	</section>
+<main class="flex-1 p-4 md:p-6">
+	<div class="mx-auto flex max-w-5xl flex-col gap-5 pb-6">
+		<section id="guard" class="hidden rounded-xl bg-card p-6 text-card-foreground ring-1 ring-foreground/10">
+			<h2 id="guard-title" class="font-heading text-base leading-snug font-medium">Admin access required</h2>
+			<p id="guard-text" class="mt-1 text-sm text-muted-foreground"></p>
+			<a href="{{BASE_PATH}}/" class="group/button mt-2 inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5">Back to dashboard</a>
+		</section>
 
-	<section id="panel" class="hidden">
-		<div class="row between" style="margin-bottom:14px">
-			<div>
-				<h1>Users</h1>
-				<p class="muted small" style="margin:4px 0 0">Create, edit, reset passwords, disable and delete accounts.</p>
+		<section id="panel" class="hidden flex flex-col gap-4">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div class="flex flex-col gap-1">
+					<h1 class="font-heading text-2xl leading-snug font-medium">Users</h1>
+					<p class="text-sm text-muted-foreground">Create, edit, reset passwords, disable and delete accounts.</p>
+				</div>
+				<button id="btn-add" type="button" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">+ Add user</button>
 			</div>
-			<button id="btn-add" class="btn primary" type="button">+ Add user</button>
-		</div>
 
-		<div id="page-error" class="error hidden"></div>
+			<div id="page-error" class="hidden"></div>
 
-		<div class="table-wrap">
-			<table>
-				<thead>
-					<tr>
-						<th>ID</th>
-						<th>Username</th>
-						<th>Email</th>
-						<th>Role</th>
-						<th>Status</th>
-						<th>Devices</th>
-						<th>Created</th>
-						<th></th>
-					</tr>
-				</thead>
-				<tbody id="rows"></tbody>
-			</table>
-		</div>
-		<p id="empty" class="muted hidden" style="margin-top:12px">No accounts yet.</p>
-	</section>
+			<div id="users-list" class="flex flex-col gap-3"></div>
+
+			<p id="empty" class="hidden text-sm text-muted-foreground">No accounts yet.</p>
+		</section>
+	</div>
 </main>
 
 <!-- Add / edit account -->
-<div id="modal-user" class="modal hidden" role="dialog" aria-modal="true">
-	<div class="box">
-		<h3 id="user-title">Add user</h3>
-		<p class="sub">At least one of username or email is required; a username can be derived from the email.</p>
-		<form id="form-user">
-			<label for="f-username">Username</label>
-			<input id="f-username" type="text" maxlength="32" autocomplete="off" placeholder="e.g. budi.santoso">
-			<label for="f-email">Email</label>
-			<input id="f-email" type="email" maxlength="255" autocomplete="off" placeholder="user@example.com">
-			<div id="field-password">
-				<label for="f-password">Password</label>
-				<input id="f-password" type="password" minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters">
+<div id="modal-user" class="gowa-overlay fixed inset-0 z-50 hidden p-4" role="dialog" aria-modal="true">
+	<div class="grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none sm:max-w-md">
+		<div class="flex flex-col gap-1">
+			<h3 id="user-title" class="font-heading text-base leading-snug font-medium">Add user</h3>
+			<p class="text-sm text-muted-foreground">At least one of username or email is required; a username can be derived from the email.</p>
+		</div>
+		<form id="form-user" class="flex flex-col gap-3">
+			<div class="flex flex-col gap-1.5">
+				<label for="f-username" class="text-sm font-medium">Username</label>
+				<input id="f-username" type="text" maxlength="32" autocomplete="off" placeholder="e.g. budi.santoso" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
 			</div>
-			<div class="check">
-				<input id="f-admin" type="checkbox">
-				<label for="f-admin" style="margin:0">Admin — can manage users</label>
+			<div class="flex flex-col gap-1.5">
+				<label for="f-email" class="text-sm font-medium">Email</label>
+				<input id="f-email" type="email" maxlength="255" autocomplete="off" placeholder="user@example.com" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
 			</div>
-			<div id="user-error" class="error hidden"></div>
-			<div class="actions">
-				<button type="button" class="btn" data-close="modal-user">Cancel</button>
-				<button type="submit" class="btn primary" id="user-submit">Save</button>
+			<div id="field-password" class="flex flex-col gap-1.5">
+				<label for="f-password" class="text-sm font-medium">Password</label>
+				<input id="f-password" type="password" minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+			</div>
+			<label class="flex items-center gap-2 text-sm font-medium">
+				<input id="f-admin" type="checkbox" class="size-4 rounded border-border ">
+				Admin — can manage users
+			</label>
+			<div id="user-error" class="hidden"></div>
+			<div class="flex justify-end gap-1.5">
+				<button type="button" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5" data-close="modal-user">Cancel</button>
+				<button type="submit" id="user-submit" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">Save</button>
 			</div>
 		</form>
 	</div>
 </div>
 
 <!-- Reset password -->
-<div id="modal-password" class="modal hidden" role="dialog" aria-modal="true">
-	<div class="box">
-		<h3>Reset password</h3>
-		<p class="sub" id="password-sub"></p>
-		<form id="form-password">
-			<label for="f-reset">New password</label>
-			<input id="f-reset" type="password" required minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters">
-			<div id="password-error" class="error hidden"></div>
-			<div class="actions">
-				<button type="button" class="btn" data-close="modal-password">Cancel</button>
-				<button type="submit" class="btn primary">Update</button>
+<div id="modal-password" class="gowa-overlay fixed inset-0 z-50 hidden p-4" role="dialog" aria-modal="true">
+	<div class="grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none sm:max-w-md">
+		<div class="flex flex-col gap-1">
+			<h3 class="font-heading text-base leading-snug font-medium">Reset password</h3>
+			<p id="password-sub" class="text-sm text-muted-foreground"></p>
+		</div>
+		<form id="form-password" class="flex flex-col gap-3">
+			<div class="flex flex-col gap-1.5">
+				<label for="f-reset" class="text-sm font-medium">New password</label>
+				<input id="f-reset" type="password" required minlength="6" maxlength="72" autocomplete="new-password" placeholder="At least 6 characters" class="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm shadow-xs outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-input dark:bg-input/30">
+			</div>
+			<div id="password-error" class="hidden"></div>
+			<div class="flex justify-end gap-1.5">
+				<button type="button" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5" data-close="modal-password">Cancel</button>
+				<button type="submit" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">Update</button>
 			</div>
 		</form>
 	</div>
 </div>
 
 <!-- Delete confirmation -->
-<div id="modal-delete" class="modal hidden" role="dialog" aria-modal="true">
-	<div class="box">
-		<h3>Delete account?</h3>
-		<p class="sub" id="delete-sub"></p>
-		<div id="delete-error" class="error hidden"></div>
-		<div class="actions">
-			<button type="button" class="btn" data-close="modal-delete">Cancel</button>
-			<button type="button" class="btn danger" id="delete-confirm">Delete</button>
+<div id="modal-delete" class="gowa-overlay fixed inset-0 z-50 hidden p-4" role="dialog" aria-modal="true">
+	<div class="grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none sm:max-w-md">
+		<div class="flex flex-col gap-1">
+			<h3 class="font-heading text-base leading-snug font-medium">Delete account?</h3>
+			<p id="delete-sub" class="text-sm text-muted-foreground"></p>
+		</div>
+		<div id="delete-error" class="hidden"></div>
+		<div class="flex justify-end gap-1.5">
+			<button type="button" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-8 gap-1.5 px-2.5" data-close="modal-delete">Cancel</button>
+			<button type="button" id="delete-confirm" class="group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40 h-8 gap-1.5 px-2.5">Delete</button>
 		</div>
 	</div>
 </div>
@@ -121,6 +132,16 @@
 	var editing = null;
 	var passwordTarget = null;
 	var deleteTarget = null;
+
+	// Reuse the dashboard's compiled button utilities.
+	var BTN_BASE = 'group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 ';
+	var BTN_SM = 'h-8 gap-1.5 px-2.5 ';
+	var BTN_OUTLINE = BTN_BASE + BTN_SM + 'border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50';
+	var BTN_DANGER = BTN_BASE + BTN_SM + 'bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40';
+	var BADGE = 'rounded-full px-2 py-0.5 text-xs font-medium';
+	var BADGE_MUTED = BADGE + ' bg-muted text-muted-foreground';
+	var BADGE_ADMIN = BADGE + ' bg-primary text-primary-foreground';
+	var BADGE_OFF = BADGE + ' bg-destructive/10 text-destructive';
 
 	function guard(title, text) {
 		$('guard-title').textContent = title;
@@ -138,7 +159,7 @@
 			closeModal(el.getAttribute('data-close'));
 			return;
 		}
-		if (el.classList && el.classList.contains('modal')) el.classList.add('hidden');
+		if (el.classList && el.classList.contains('gowa-overlay')) el.classList.add('hidden');
 	});
 	document.addEventListener('keydown', function (ev) {
 		if (ev.key !== 'Escape') return;
@@ -154,41 +175,81 @@
 	function actionButton(label, className, handler) {
 		var b = document.createElement('button');
 		b.type = 'button';
-		b.className = 'btn small ' + (className || '');
+		b.className = className;
 		b.textContent = label;
 		b.addEventListener('click', handler);
 		return b;
 	}
 
 	function render() {
-		var body = $('rows');
-		body.innerHTML = '';
+		var list = $('users-list');
+		list.innerHTML = '';
 		$('empty').classList.toggle('hidden', users.length > 0);
 
 		users.forEach(function (u) {
-			var tr = document.createElement('tr');
 			var own = me && u.id === me.id;
-			tr.innerHTML =
-				'<td>' + u.id + (own ? ' <span class="badge">you</span>' : '') + '</td>' +
-				'<td>' + G.esc(u.username) + '</td>' +
-				'<td>' + (u.email ? G.esc(u.email) : '<span class="muted">—</span>') + '</td>' +
-				'<td>' + (u.is_admin ? '<span class="badge admin">admin</span>' : '<span class="badge">user</span>') + '</td>' +
-				'<td>' + (u.disabled ? '<span class="badge off">disabled</span>' : '<span class="badge on">active</span>') + '</td>' +
-				'<td>' + (u.device_count || 0) + '</td>' +
-				'<td class="small muted">' + G.esc(fmtDate(u.created_at)) + '</td>';
+			var row = document.createElement('div');
+			row.className = 'flex flex-wrap items-center justify-between gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10';
 
-			var actions = document.createElement('td');
-			actions.className = 'actions';
-			actions.appendChild(actionButton('Edit', '', function () { openEdit(u); }));
-			actions.appendChild(actionButton('Password', '', function () { openPassword(u); }));
+			var info = document.createElement('div');
+			info.className = 'flex min-w-0 flex-col gap-1.5';
+
+			var head = document.createElement('div');
+			head.className = 'flex flex-wrap items-center gap-2';
+			var name = document.createElement('span');
+			name.className = 'text-sm font-medium';
+			name.textContent = u.username;
+			head.appendChild(name);
+			if (own) {
+				var you = document.createElement('span');
+				you.className = BADGE_MUTED;
+				you.textContent = 'you';
+				head.appendChild(you);
+			}
+			if (u.is_admin) {
+				var adm = document.createElement('span');
+				adm.className = BADGE_ADMIN;
+				adm.textContent = 'admin';
+				head.appendChild(adm);
+			}
+			info.appendChild(head);
+
+			var sub = document.createElement('span');
+			sub.className = 'text-xs text-muted-foreground';
+			sub.textContent = (u.email || 'no email') + ' · ID ' + u.id;
+			info.appendChild(sub);
+
+			var meta = document.createElement('div');
+			meta.className = 'flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground';
+			var state = document.createElement('span');
+			state.className = u.disabled ? BADGE_OFF : BADGE_MUTED;
+			state.textContent = u.disabled ? 'disabled' : 'active';
+			meta.appendChild(state);
+			meta.appendChild(document.createTextNode('·'));
+			var devices = document.createElement('span');
+			devices.textContent = String(u.device_count || 0) + ' devices';
+			meta.appendChild(devices);
+			meta.appendChild(document.createTextNode('·'));
+			var created = document.createElement('span');
+			created.textContent = fmtDate(u.created_at);
+			meta.appendChild(created);
+			info.appendChild(meta);
+
+			row.appendChild(info);
+
+			var actions = document.createElement('div');
+			actions.className = 'flex flex-wrap items-center gap-1.5';
+			actions.appendChild(actionButton('Edit', BTN_OUTLINE, function () { openEdit(u); }));
+			actions.appendChild(actionButton('Password', BTN_OUTLINE, function () { openPassword(u); }));
 			// An admin cannot disable or delete their own account (the server
 			// rejects it too) — hiding the buttons keeps the UI honest.
 			if (!own) {
-				actions.appendChild(actionButton(u.disabled ? 'Enable' : 'Disable', '', function () { toggleDisabled(u); }));
-				actions.appendChild(actionButton('Delete', 'danger', function () { openDelete(u); }));
+				actions.appendChild(actionButton(u.disabled ? 'Enable' : 'Disable', BTN_OUTLINE, function () { toggleDisabled(u); }));
+				actions.appendChild(actionButton('Delete', BTN_DANGER, function () { openDelete(u); }));
 			}
-			tr.appendChild(actions);
-			body.appendChild(tr);
+			row.appendChild(actions);
+
+			list.appendChild(row);
 		});
 	}
 
